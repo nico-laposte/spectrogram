@@ -211,14 +211,20 @@ async function loadFromHash(){
   if(!hash.startsWith('#data=')) return;
   setOv(true,'Chargement…',5);
   try {
-    const b64 = decodeURIComponent(hash.slice(6));
+    const raw = hash.slice(6);
+    // Diagnostic : afficher les 60 premiers caractères et la longueur totale
+    ilbl.textContent = 'hash: '+raw.length+' chars / début: '+raw.slice(0,40);
+    await tick(1500);  // laisser le temps de lire
+    // Normaliser le Base64 : remplacer les espaces et caractères URL-encodés
+    const b64 = raw.replace(/ /g,'+').replace(/%2B/g,'+').replace(/%2F/g,'/').replace(/%3D/g,'=');
     const bin = atob(b64);
     const buf = new Uint8Array(bin.length);
     for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);
-    history.replaceState(null,'',location.pathname);  // nettoie le hash
+    history.replaceState(null,'',location.pathname);
     await load(buf.buffer);
   } catch(e){
     setOv(false);
+    ilbl.textContent = 'Erreur: '+e.message;
     console.error('Erreur chargement URL:', e);
   }
 }

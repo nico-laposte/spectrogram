@@ -216,29 +216,29 @@ async function loadFromGithub(){
   for(let i=0; i<MAX_TRIES; i++){
     try {
       const url  = 'input.m4a?t=' + Date.now();
-      ilbl.textContent = 'Essai '+(i+1)+' : '+url;
       const resp = await fetch(url);
-      ilbl.textContent = 'Réponse : '+resp.status+' '+resp.statusText;
       if(resp.ok){
         const bytes = await resp.arrayBuffer();
-        ilbl.textContent = 'Taille : '+bytes.byteLength+' octets';
-        await tick(800);
         await load(bytes);
         return;
       }
     } catch(e){
-      ilbl.textContent = 'Erreur fetch : '+e.message;
+      console.warn('Fetch essai '+(i+1)+' :', e.message);
     }
-    if(i < MAX_TRIES-1) await tick(DELAY);
+    if(i < MAX_TRIES-1){
+      setOv(true, 'Chargement… ('+(i+2)+'/'+MAX_TRIES+')', 5+Math.round((i+1)/MAX_TRIES*40));
+      await tick(DELAY);
+    }
   }
   setOv(false);
-  ilbl.textContent = 'Importer un fichier audio';
 }
 
 // Au chargement : si ?auto dans l'URL, charger input.m4a automatiquement.
 // Le raccourci ouvrira https://nico-laposte.github.io/spectrogram/?auto
 window.addEventListener('load', ()=>{
-  if(location.search.includes('auto')) loadFromGithub();
+  if(location.search.includes('auto') || location.href.includes('auto')){
+    loadFromGithub();
+  }
 });
 
 function fail(file){

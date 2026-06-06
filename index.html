@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0f0a">
+<title>Spectrogramme — Analyse Sonore</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400&family=Cormorant+Garamond:ital,wght@1,300&display=swap');
+:root{--bg:#0a0f0a;--surf:#111a11;--bdr:#1e2e1e;--acc:#7ecf6e;--acc2:#f0c84a;--txt:#c8d8c0;--mut:#4a5e44}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--bg);color:var(--txt);font-family:'DM Mono',monospace;height:100%;overflow:hidden;overscroll-behavior:none}
+.app{display:flex;flex-direction:column;height:100dvh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{padding:14px 20px 10px;border-bottom:1px solid var(--bdr);display:flex;align-items:baseline;gap:12px;flex-shrink:0}
+header h1{font-family:'Cormorant Garamond',serif;font-style:italic;font-weight:300;font-size:22px;color:var(--acc)}
+header span{font-size:10px;color:var(--mut);letter-spacing:.12em;text-transform:uppercase}
+.iz{flex-shrink:0;margin:12px 16px 0;border:1px dashed var(--bdr);border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px;position:relative;overflow:hidden}
+.iz.has{border-color:var(--acc);border-style:solid}
+.iz input{position:absolute;inset:0;opacity:0;width:100%;height:100%}
+.icn{width:32px;height:32px;flex-shrink:0;fill:none;stroke:var(--acc);stroke-width:1.5}
+.lbl{font-size:12px}.sub{font-size:10px;color:var(--mut);margin-top:2px}
+.tip{display:none;margin:6px 16px 0;font-size:10px;color:var(--mut);line-height:1.6;padding:10px 12px;background:var(--surf);border-radius:8px;border:1px solid var(--bdr)}
+.tip strong{color:var(--acc2)}
+.viz{flex:1;margin:12px 16px;position:relative;border-radius:10px;overflow:hidden;background:var(--surf);border:1px solid var(--bdr);min-height:0}
+canvas{position:absolute;inset:0;width:100%;height:100%}
+#pc{pointer-events:none}
+.em{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--mut);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.em svg{opacity:.3}
+#ph{position:absolute;top:0;bottom:0;width:1.5px;background:rgba(255,255,255,.7);display:none;box-shadow:0 0 6px rgba(255,255,255,.4);pointer-events:none}
+.fl{position:absolute;left:4px;top:0;bottom:0;pointer-events:none}
+.fl span{position:absolute;font-size:8px;color:rgba(200,216,192,.45);transform:translateY(-50%)}
+.tl{position:absolute;bottom:4px;left:28px;right:8px;display:flex;justify-content:space-between;pointer-events:none}
+.tl span{font-size:8px;color:rgba(200,216,192,.4)}
+.ov{position:absolute;inset:0;background:rgba(10,15,10,.9);display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+.ov.on{display:flex}
+.sp{width:24px;height:24px;border:2px solid var(--bdr);border-top-color:var(--acc);border-radius:50%;animation:s .8s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+.ot{font-size:11px;color:var(--acc);letter-spacing:.1em;text-transform:uppercase}
+.ob{width:150px;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden}
+.ob div{height:100%;width:0%;background:var(--acc);transition:width .12s}
+.ctrl{flex-shrink:0;padding:0 16px 12px;display:flex;flex-direction:column;gap:10px}
+.row{display:flex;align-items:center;gap:10px}
+.rl{font-size:9px;color:var(--mut);letter-spacing:.1em;text-transform:uppercase;min-width:40px;flex-shrink:0}
+#pb{width:40px;height:40px;border-radius:50%;background:var(--acc);border:none;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+#pb:disabled{opacity:.3}#pb svg{fill:var(--bg)}
+.pw{flex:1;height:28px;position:relative;display:flex;align-items:center}
+.pt{width:100%;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden}
+#pf{height:100%;width:0%;background:var(--acc)}
+.pw input{position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0}
+#td{font-size:10px;color:var(--mut);white-space:nowrap;min-width:60px;text-align:right}
+.sbs{display:flex;gap:5px;flex:1}
+.sb{flex:1;height:30px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px;color:var(--mut);font-family:'DM Mono',monospace;font-size:11px}
+.sb.on{background:rgba(126,207,110,.1);border-color:var(--acc);color:var(--acc)}
+.fic{display:flex;align-items:center;gap:6px;flex:1}
+.fic label{font-size:9px;color:var(--mut)}
+.fic input{width:62px;height:28px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-family:'DM Mono',monospace;font-size:11px;text-align:center;-webkit-appearance:none}
+.fic input:focus{outline:none;border-color:var(--acc)}
+#ab{height:34px;flex:1;background:rgba(126,207,110,.08);border:1px solid var(--acc);border-radius:8px;color:var(--acc);font-family:'DM Mono',monospace;font-size:11px;display:none}
+#ab.on{display:block}
+.dot{width:8px;height:8px;border-radius:50%;background:rgb(255,80,80);flex-shrink:0}
+#sel{position:absolute;top:0;bottom:0;background:rgba(126,207,110,.15);border-left:1.5px solid var(--acc);border-right:1.5px solid var(--acc);display:none;pointer-events:none}
+#selrd{position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--acc);background:rgba(10,15,10,.8);padding:3px 8px;border-radius:6px;display:none;pointer-events:none;white-space:nowrap}
+.rbtn{height:32px;padding:0 12px;background:var(--surf);border:1px solid var(--bdr);border-radius:8px;color:var(--mut);font-family:'DM Mono',monospace;font-size:11px}
+.rbtn.on{background:rgba(126,207,110,.1);border-color:var(--acc);color:var(--acc)}
+.rbtn:disabled{opacity:.35}
+#zoomBadge{position:absolute;top:6px;right:6px;display:none;align-items:center;gap:8px;background:rgba(240,200,74,.14);border:1px solid var(--acc2);border-radius:8px;padding:4px 6px 4px 10px}
+#zoomBadge.on{display:flex}
+#zoomTxt{font-size:10px;color:var(--acc2);white-space:nowrap}
+#zoomExit{width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:var(--acc2);color:#0a0f0a;border:none;border-radius:50%;font-family:'DM Mono',monospace;font-size:12px;line-height:1;padding:0}
+.viz.zoomed{border-color:var(--acc2);box-shadow:inset 0 0 0 1px rgba(240,200,74,.4)}
+.pl{width:36px;height:20px;background:var(--bdr);border-radius:10px;position:relative;border:none;flex-shrink:0;transition:background .2s}
+.pl.on{background:rgba(240,200,74,.3)}
+.pl::after{content:'';position:absolute;width:14px;height:14px;background:var(--mut);border-radius:50%;top:3px;left:3px;transition:transform .2s,background .2s}
+.pl.on::after{transform:translateX(16px);background:var(--acc2)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header><h1>Merle</h1><span>analyse sonore</span></header>
+
+  <div class="iz" id="iz">
+    <svg class="icn" viewBox="0 0 32 32"><path d="M16 4v16M10 14l6 6 6-6M6 22v4a2 2 0 002 2h16a2 2 0 002-2v-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div><div class="lbl" id="ilbl">Importer un fichier audio</div><div class="sub">mp3 · m4a · wav · aac</div></div>
+    <input type="file" id="fi" accept="audio/*,video/*,.mov,.mp4,.m4a,.mp3,.wav,.aac">
+  </div>
+  <div class="tip" id="tip"></div>
+
+  <div class="viz">
+    <canvas id="sc"></canvas><canvas id="pc"></canvas>
+    <div id="sel"></div>
+    <div id="ph"></div>
+    <div class="fl" id="flbl"></div>
+    <div class="tl" id="tlbl"></div>
+    <div id="selrd"></div>
+    <div id="zoomBadge"><span id="zoomTxt"></span><button id="zoomExit" aria-label="Vue complète">✕</button></div>
+    <div class="em" id="em">
+      <svg width="36" height="36" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.2">
+        <circle cx="20" cy="20" r="14"/><path d="M15 16c0-2.8 2.2-5 5-5s5 2.2 5 5v6" stroke-linecap="round"/><circle cx="20" cy="25" r="2" fill="currentColor"/>
+      </svg><span>importer un fichier · glisser pour zoomer</span>
+    </div>
+    <div class="ov" id="ov"><div class="sp"></div><div class="ot" id="ot">Analyse…</div><div class="ob"><div id="ob"></div></div></div>
+  </div>
+
+
+  <div class="ctrl">
+    <div class="row">
+      <button id="pb" disabled><svg id="pi" width="16" height="16" viewBox="0 0 16 16"><polygon points="4,2 14,8 4,14"/></svg></button>
+      <div class="pw"><div class="pt"><div id="pf"></div></div><input type="range" id="pr" min="0" max="1000" value="0"></div>
+      <div id="td">0:00 / 0:00</div>
+    </div>
+    <div class="row">
+      <div class="rl">Vitesse</div>
+      <div class="sbs">
+        <button class="sb" data-s="0.25">×0.25</button><button class="sb" data-s="0.5">×0.5</button>
+        <button class="sb" data-s="0.75">×0.75</button><button class="sb on" data-s="1">×1</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="rl">Pitch</div>
+      <div class="fic">
+        <label>min</label><input type="number" id="pmin" value="2000" min="100" max="10000" step="100">
+        <span style="color:var(--mut)">–</span>
+        <label>max</label><input type="number" id="pmax" value="8000" min="100" max="12000" step="100">
+        <span style="color:var(--mut);font-size:9px">Hz</span>
+      </div>
+    </div>
+    <div class="row">
+      <div class="rl">Courbe</div><div class="dot"></div>
+      <button class="pl on" id="ptg"></button>
+      <div class="rl" style="min-width:0;margin-left:14px">Notes</div>
+      <button class="pl on" id="ntg"></button>
+      <div style="flex:1"></div>
+      <button id="ab">↻ Relancer</button>
+    </div>
+    <div class="row">
+      <div class="rl">Région</div>
+      <button id="loopBtn" class="rbtn on">🔁 Boucle</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const MFREQ = 12000, FFTN = 2048, NCOLS = 600;
+
+let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
+let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
+let curve=[], spec=null;
+// Fenêtre visible (zoom) en secondes + mode boucle + sélection en cours
+let viewStart=0, viewEnd=0, looping=true;
+let selX0=null, selX1=null, selecting=false;
+let stopTimer=null;
+
+const $ = id => document.getElementById(id);
+const iz=$('iz'), ilbl=$('ilbl'), tip=$('tip'), sc=$('sc'), pc=$('pc'), ph=$('ph');
+const flbl=$('flbl'), tlbl=$('tlbl'), em=$('em'), ov=$('ov'), ot=$('ot'), ob=$('ob');
+const pb=$('pb'), pi=$('pi'), pf=$('pf'), pr=$('pr'), td=$('td'), ab=$('ab'), ptg=$('ptg'), ntg=$('ntg');
+const pmin=$('pmin'), pmax=$('pmax');
+const sel=$('sel'), selrd=$('selrd'), loopBtn=$('loopBtn');
+const zoomBadge=$('zoomBadge'), zoomTxt=$('zoomTxt'), zoomExit=$('zoomExit');
+
+// ── IMPORT ────────────────────────────────────────────────────────────────
+$('fi').addEventListener('change', e => { const f=e.target.files[0]; if(f) load(f); });
+
+async function load(source){
+  // source = File (import manuel) ou ArrayBuffer (depuis hash URL)
+  const job = ++busy;
+  tip.style.display='none';
+  setOv(true,'Décodage…',10);
+  stopAll();
+
+  if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
+
+  let bytes, name;
+  if(source instanceof File){
+    name = source.name;
+    try { bytes = await source.arrayBuffer(); }
+    catch(e){ if(job!==busy)return; setOv(false); return fail(source); }
+  } else {
+    // ArrayBuffer passé directement (chemin URL hash)
+    bytes = source;
+    name = 'enregistrement.m4a';
+  }
+  if(job!==busy) return;
+
+  setOv(true,'Décodage audio…',20);
+  try {
+    abuf = await actx.decodeAudioData(bytes.slice(0));
+  } catch(e){
+    if(job!==busy)return; setOv(false);
+    if(source instanceof File) fail(source);
+    return;
+  }
+  if(job!==busy) return;
+
+  dur = abuf.duration;
+  viewStart = 0; viewEnd = dur; offset = 0;
+  clearStretchCache();
+  ilbl.textContent = name;
+  iz.classList.add('has');
+  em.style.display='none';
+  pb.disabled=false;
+  ab.classList.add('on');
+  await analyze(job);
+}
+
+// ── CHARGEMENT AUTOMATIQUE DEPUIS L'URL (#data=base64) ───────────────────
+async function loadFromHash(){
+  const hash = location.hash;
+  if(!hash.startsWith('#data=')) return;
+  setOv(true,'Chargement…',5);
+  try {
+    const b64 = decodeURIComponent(hash.slice(6));
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);
+    history.replaceState(null,'',location.pathname);  // nettoie le hash
+    await load(buf.buffer);
+  } catch(e){
+    setOv(false);
+    console.error('Erreur chargement URL:', e);
+  }
+}
+window.addEventListener('load', ()=>{ if(location.hash.startsWith('#data=')) loadFromHash(); });
+
+function fail(file){
+  iz.classList.remove('has');
+  tip.style.display='block';
+  const ext=(file.name||'').split('.').pop().toLowerCase();
+  if(['mov','mp4','m4v'].includes(ext))
+    tip.innerHTML='<strong>Vidéo non décodable par Safari.</strong> '
+      +'Les vidéos iPhone sont souvent filmées en <strong>HEVC / H.265</strong>, un format que Safari ne sait pas décoder dans une page web. Il faut un fichier audio (ou une vidéo <strong>H.264 / AAC</strong>).<br><br>'
+      +'<strong>Extraire l\'audio avec l\'app Raccourcis :</strong><br>'
+      +'① Ouvrez l\'app <strong>Raccourcis</strong> → <strong>+</strong> pour un nouveau raccourci<br>'
+      +'② Ajoutez l\'action <strong>Encoder le média</strong> → activez <strong>Audio uniquement</strong><br>'
+      +'③ Ajoutez l\'action <strong>Enregistrer dans des fichiers</strong><br>'
+      +'④ Lancez le raccourci, choisissez votre vidéo → vous obtenez un <strong>.m4a</strong> à importer ici<br><br>'
+      +'<strong>Pour vos prochains enregistrements :</strong> Réglages → Appareil photo → Formats → <strong>Le plus compatible</strong> (filme en H.264/AAC), ou utilisez l\'app <strong>Dictaphone</strong> qui produit directement des fichiers .m4a importables.';
+  else
+    tip.innerHTML='<strong>Format non reconnu (.'+ext+').</strong> Essayez .mp3, .m4a ou .wav.';
+}
+
+// ── ANALYSE ───────────────────────────────────────────────────────────────
+async function analyze(job){
+  drawn=false;
+  setOv(true,'Analyse…',25);
+  await tick(30);
+
+  const W = sc.parentElement.clientWidth||320;
+  const H = sc.parentElement.clientHeight||200;
+  sc.width=W; sc.height=H; pc.width=W; pc.height=H;
+
+  const sr   = abuf.sampleRate;
+  const data = monoMix(abuf);
+  const total= data.length;
+  const bins = FFTN/2;
+  const maxBin = Math.min(bins-1, Math.floor(MFREQ/(sr/2)*bins));
+  const cols = Math.min(NCOLS, W*2);
+  const win  = hann(FFTN);
+  const out  = new Float32Array(cols*maxBin);
+  let gMax=0;
+
+  // Fenêtre visible en échantillons
+  const vs = Math.floor(viewStart * sr);
+  const ve = Math.min(total, Math.floor(viewEnd * sr));
+  const span = Math.max(FFTN+1, ve - vs);   // au moins une fenêtre FFT
+
+  const STEP=12;
+  for(let ci=0; ci<cols; ci+=STEP){
+    if(job!==busy) return setOv(false);
+    const end=Math.min(ci+STEP,cols);
+    for(let c=ci;c<end;c++){
+      const start=vs + Math.floor(c/cols*(span-FFTN));
+      const m=fftMag(data,start,FFTN,win,maxBin);
+      const off=c*maxBin;
+      for(let b=0;b<maxBin;b++){ out[off+b]=m[b]; if(m[b]>gMax)gMax=m[b]; }
+    }
+    setOv(true,'Analyse… '+Math.round(ci/cols*100)+'%',25+Math.round(ci/cols*55));
+    await tick(1);
+  }
+  if(job!==busy) return setOv(false);
+
+  spec={out,cols,maxBin,gMax};
+  try{
+    drawSpec(W,H);
+    makeCurve();
+    drawCurve(H);
+    freqLabels();
+    timeLabels();
+  }catch(err){ console.error('draw error:', err); }
+  drawn=true;
+  setOv(false);
+}
+
+function monoMix(buf){
+  if(buf.numberOfChannels===1) return buf.getChannelData(0);
+  const a=buf.getChannelData(0), b=buf.getChannelData(1), o=new Float32Array(a.length);
+  for(let i=0;i<a.length;i++) o[i]=(a[i]+b[i])*0.5;
+  return o;
+}
+
+// FFT magnitude, returns first maxBin bins
+function fftMag(data,start,N,win,maxBin){
+  const re=new Float32Array(N), im=new Float32Array(N);
+  for(let i=0;i<N;i++) re[i]=(data[start+i]||0)*win[i];
+  for(let i=1,j=0;i<N;i++){let bit=N>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j){const t=re[i];re[i]=re[j];re[j]=t;}}
+  for(let len=2;len<=N;len<<=1){
+    const ang=-2*Math.PI/len, wR=Math.cos(ang), wI=Math.sin(ang);
+    for(let i=0;i<N;i+=len){
+      let cR=1,cI=0;
+      for(let k=0;k<len>>1;k++){
+        const h=i+k+(len>>1), vR=re[h]*cR-im[h]*cI, vI=re[h]*cI+im[h]*cR;
+        re[h]=re[i+k]-vR; im[h]=im[i+k]-vI; re[i+k]+=vR; im[i+k]+=vI;
+        const nR=cR*wR-cI*wI; cI=cR*wI+cI*wR; cR=nR;
+      }
+    }
+  }
+  const mag=new Float32Array(maxBin);
+  for(let i=0;i<maxBin;i++) mag[i]=Math.sqrt(re[i]*re[i]+im[i]*im[i]);
+  return mag;
+}
+
+function hann(N){const w=new Float32Array(N);for(let i=0;i<N;i++)w[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));return w;}
+
+// ── DRAW ──────────────────────────────────────────────────────────────────
+function drawSpec(W,H){
+  const {out,cols,maxBin,gMax}=spec;
+  const ctx=sc.getContext('2d'), img=ctx.createImageData(W,H), px=img.data;
+  for(let x=0;x<W;x++){
+    const ci=Math.min(Math.floor(x/W*cols),cols-1), off=ci*maxBin;
+    for(let y=0;y<H;y++){
+      const bin=Math.min(Math.floor((H-1-y)/(H-1)*maxBin),maxBin-1);
+      const [r,g,b]=color(out[off+bin]/(gMax||1));
+      const i=(y*W+x)*4; px[i]=r;px[i+1]=g;px[i+2]=b;px[i+3]=255;
+    }
+  }
+  ctx.putImageData(img,0,0);
+}
+
+function makeCurve(){
+  const {out,cols,maxBin,gMax}=spec;
+  const p1=parseInt(pmin.value)||2000, p2=parseInt(pmax.value)||8000;
+  const b1=Math.floor(p1/MFREQ*maxBin), b2=Math.ceil(p2/MFREQ*maxBin);
+  curve=[];
+  for(let c=0;c<cols;c++){
+    const off=c*maxBin; let mv=0,pk=-1;
+    for(let b=b1;b<=Math.min(b2,maxBin-1);b++){if(out[off+b]>mv){mv=out[off+b];pk=b;}}
+    curve.push(pk>=0&&mv>gMax*0.04 ? {t:c/cols,hz:pk/maxBin*MFREQ} : null);
+  }
+}
+
+// Convertit une fréquence en nom de note anglais + octave (ex: 440 -> "A4")
+function hzToNote(hz){
+  if(!hz||hz<=0) return null;
+  const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const midi=Math.round(69 + 12*Math.log2(hz/440));
+  const name=names[((midi%12)+12)%12];
+  const oct=Math.floor(midi/12)-1;
+  return {label:name+oct, midi, cents:Math.round(100*(69+12*Math.log2(hz/440)-midi))};
+}
+
+function drawCurve(H){
+  const ctx=pc.getContext('2d'), W=pc.width; H=H||pc.height;
+  ctx.clearRect(0,0,W,H);
+  if(!curve.length) return;
+  const yOf=hz=>(1-hz/MFREQ)*H;
+
+  if(showP){
+    const p1=parseInt(pmin.value)||2000, p2=parseInt(pmax.value)||8000;
+    // Bande de plage pitch (discrète)
+    const y1=(1-p2/MFREQ)*H, y2=(1-p1/MFREQ)*H;
+    ctx.fillStyle='rgba(240,200,74,.04)'; ctx.fillRect(0,y1,W,y2-y1);
+    ctx.strokeStyle='rgba(240,200,74,.15)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+    [y1,y2].forEach(y=>{ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();});
+    ctx.setLineDash([]);
+    // Points de pitch façon Praat
+    ctx.fillStyle='rgba(255,80,80,.95)';
+    for(const p of curve){
+      if(!p) continue;
+      const x=p.t*W, y=yOf(p.hz);
+      ctx.beginPath(); ctx.arc(x,y,1.6,0,6.283); ctx.fill();
+    }
+  }
+
+  // Étiquettes de notes (indépendantes de l'affichage de la courbe)
+  if(showNotes) labelHeldNotes(ctx,W,H,yOf);
+}
+
+// Détecte les plateaux de hauteur stables et y pose une étiquette de note,
+// en évitant les superpositions (espacement minimal en pixels).
+function labelHeldNotes(ctx,W,H,yOf){
+  const MIN_LEN=5;            // tenue minimale pour étiqueter
+  ctx.font='600 9px "DM Mono", monospace';
+  ctx.textBaseline='middle';
+  ctx.textAlign='center';
+
+  // 1) collecter les segments tenus candidats
+  const labels=[];
+  let i=0;
+  while(i<curve.length){
+    if(!curve[i]){ i++; continue; }
+    const n0=hzToNote(curve[i].hz);
+    let j=i+1, sumHz=curve[i].hz, cnt=1;
+    while(j<curve.length && curve[j]){
+      const nj=hzToNote(curve[j].hz);
+      if(!nj || nj.midi!==n0.midi) break;
+      sumHz+=curve[j].hz; cnt++; j++;
+    }
+    if(cnt>=MIN_LEN){
+      const midT=(curve[i].t+curve[j-1].t)/2;
+      const avgHz=sumHz/cnt;
+      labels.push({x:midT*W, y:yOf(avgHz), lab:hzToNote(avgHz).label});
+    }
+    i=j;
+  }
+
+  if(!labels.length) return;
+
+  // 2) chaque étiquette est posée juste AU-DESSUS de son point sur la courbe
+  ctx.textBaseline='top';
+  for(const L of labels){
+    const w=ctx.measureText(L.lab).width;
+    let y=L.y-16;                      // au-dessus du point de la courbe
+    if(y < 0) y=L.y+5;                 // si trop haut, repasser en dessous
+    ctx.fillStyle='rgba(10,15,10,.55)';
+    ctx.fillRect(L.x-w/2-2, y, w+4, 11);
+    ctx.fillStyle='rgba(255,225,140,.95)';
+    ctx.fillText(L.lab, L.x, y+1);
+  }
+  ctx.textBaseline='middle';
+  ctx.fillStyle='rgba(255,80,80,.95)';
+}
+
+function freqLabels(){
+  flbl.innerHTML='';
+  [10000,8000,6000,4000,2000,1000,500].forEach(hz=>{
+    if(hz>MFREQ)return;
+    const s=document.createElement('span');
+    s.textContent=hz>=1000?hz/1000+'k':hz; s.style.top=((1-hz/MFREQ)*100)+'%';
+    flbl.appendChild(s);
+  });
+}
+function timeLabels(){
+  tlbl.innerHTML='';
+  for(let i=0;i<=5;i++){const s=document.createElement('span');s.textContent=fmt(viewStart+i/5*(viewEnd-viewStart));tlbl.appendChild(s);}
+}
+
+function color(t){
+  t=Math.pow(Math.max(0,Math.min(1,t)),.35);
+  const s=[[0,[10,15,10]],[.15,[10,40,30]],[.35,[20,80,60]],[.55,[60,150,80]],[.72,[140,210,60]],[.88,[230,220,40]],[1,[255,240,180]]];
+  for(let i=1;i<s.length;i++){if(t<=s[i][0]){const lo=s[i-1][1],hi=s[i][1],f=(t-s[i-1][0])/(s[i][0]-s[i-1][0]);return[lo[0]+f*(hi[0]-lo[0]),lo[1]+f*(hi[1]-lo[1]),lo[2]+f*(hi[2]-lo[2])].map(Math.round);}}
+  return[255,240,180];
+}
+
+// ── PLAYBACK ──────────────────────────────────────────────────────────────
+// ── TIME-STRETCH (OLA, hauteur préservée) ───────────────────────────────────
+// Cache des buffers ralentis par vitesse. ×1 = abuf direct (pas de traitement).
+let stretchCache = {};        // { "0.5": AudioBuffer, ... }
+let playBuf = null;           // buffer actuellement joué (abuf ou version étirée)
+
+function clearStretchCache(){ stretchCache = {}; }
+
+// Overlap-add time stretch. factor>1 allonge (ralentit) sans changer la hauteur.
+// Sur un signal mono. Fenêtre de Hann, recouvrement 50%.
+function timeStretch(input, sr, factor){
+  const N = input.length;
+  const frame = 1024;               // taille d'analyse
+  const synHop = frame >> 1;        // saut de synthèse (50% overlap)
+  const anaHop = synHop / factor;   // saut d'analyse (plus petit si on ralentit)
+  const outLen = Math.ceil(N * factor) + frame;
+  const out = new Float32Array(outLen);
+  const winSum = new Float32Array(outLen);
+  const w = hann(frame);
+
+  let ana = 0, syn = 0;
+  while(ana + frame < N){
+    const a0 = Math.floor(ana);
+    for(let i=0;i<frame;i++){
+      const s = (input[a0+i]||0) * w[i];
+      out[syn+i]    += s;
+      winSum[syn+i] += w[i];
+    }
+    ana += anaHop;
+    syn += synHop;
+  }
+  // normaliser par la somme des fenêtres
+  for(let i=0;i<outLen;i++){ if(winSum[i]>1e-6) out[i] /= winSum[i]; }
+
+  const buf = actx.createBuffer(1, outLen, sr);
+  buf.getChannelData(0).set(out);
+  return buf;
+}
+
+// Récupère (ou calcule) le buffer à jouer pour la vitesse demandée
+async function getPlayBuffer(spd){
+  if(spd === 1) return abuf;             // direct, instantané
+  const key = String(spd);
+  if(stretchCache[key]) return stretchCache[key];
+  setOv(true, 'Préparation ×'+spd+'…', 50);
+  await tick(20);
+  const mono = monoMix(abuf);
+  const stretched = timeStretch(mono, abuf.sampleRate, 1/spd); // 1/spd = facteur d'allongement
+  stretchCache[key] = stretched;
+  setOv(false);
+  return stretched;
+}
+
+// ── PLAYBACK ────────────────────────────────────────────────────────────────
+// On joue playBuf à playbackRate=1 → hauteur préservée.
+// Lecture confinée à la fenêtre visible [viewStart, viewEnd] (temps réel).
+// Le buffer étiré a une échelle = temps_réel / speed.
+// Garantit un contexte audio en état 'running'. Gère l'état iOS 'interrupted'.
+async function ensureContext(){
+  if(actx && actx.state==='running') return;
+  // 1) tenter resume()
+  if(actx){
+    try{ await actx.resume(); }catch(e){}
+    let tries=0;
+    while(actx.state!=='running' && actx.state!=='closed' && tries<8){ await tick(10); tries++; }
+    if(actx.state==='running') return;
+  }
+  // 2) échec → recréer un contexte neuf et y reconstruire le buffer PCM
+  const oldBuf = abuf;
+  try{ if(actx) actx.close(); }catch(e){}
+  actx = new (window.AudioContext||window.webkitAudioContext)();
+  try{ await actx.resume(); }catch(e){}
+  if(oldBuf){
+    // recopier les données PCM dans un buffer du nouveau contexte
+    const nb = actx.createBuffer(oldBuf.numberOfChannels, oldBuf.length, oldBuf.sampleRate);
+    for(let ch=0; ch<oldBuf.numberOfChannels; ch++){
+      nb.copyToChannel ? nb.copyToChannel(oldBuf.getChannelData(ch), ch)
+                       : nb.getChannelData(ch).set(oldBuf.getChannelData(ch));
+    }
+    abuf = nb;
+  }
+  clearStretchCache();   // les buffers étirés appartenaient à l'ancien contexte
+}
+
+async function play(){
+  if(!abuf) return;
+  clearTimeout(stopTimer);
+  // DÉBLOCAGE SYNCHRONE dans le geste tactile, AVANT tout await :
+  // jouer un échantillon muet réveille le contexte sur iOS.
+  try{
+    if(actx){
+      actx.resume();
+      const b=actx.createBuffer(1,1,actx.sampleRate);
+      const s=actx.createBufferSource(); s.buffer=b; s.connect(actx.destination); s.start(0);
+    }
+  }catch(e){}
+  await ensureContext();
+  playBuf = await getPlayBuffer(speed);
+  stopSrc();
+  src=actx.createBufferSource(); src.buffer=playBuf;
+  src.playbackRate.value=1; src.connect(actx.destination);
+
+  // Bornes de la fenêtre dans le buffer étiré (secondes)
+  const lo = viewStart / speed, hi = viewEnd / speed;
+  if(offset < viewStart || offset >= viewEnd) offset = viewStart;
+  const bufOffset = offset / speed;
+
+  // Toujours définir les bornes de boucle (permet d'activer src.loop à la volée)
+  src.loop = looping;
+  src.loopStart = lo;
+  src.loopEnd   = hi;
+
+  t0=actx.currentTime;
+  try{
+    if(looping){
+      src.start(0, bufOffset);
+    } else {
+      const remain = hi - bufOffset;
+      src.start(0, bufOffset, Math.max(0.01, remain));
+    }
+  }catch(err){
+    console.error('start error:', err); return;
+  }
+  playing=true; setIcon(true); ph.style.display='block';
+  src.onended=()=>{ if(playing){ stopAll(); } };  // déclenché à la fin en lecture unique
+  loop();
+}
+function pause(){ if(!playing)return; clearTimeout(stopTimer); offset+=(actx.currentTime-t0)*speed; if(offset>viewEnd)offset=viewEnd; stopSrc(); playing=false; setIcon(false); cancelAnimationFrame(raf); }
+function stopAll(){ clearTimeout(stopTimer); stopSrc(); playing=false; offset=viewStart; setIcon(false); ph.style.display='none'; cancelAnimationFrame(raf); drawPlayhead(viewStart); }
+function stopSrc(){ if(src){src.onended=null;try{src.stop();}catch(e){}src.disconnect();src=null;} }
+function loop(){
+  if(!playing)return;
+  const winLen = viewEnd - viewStart;
+  let pos = offset + (actx.currentTime - t0) * speed;
+  // repli dans la fenêtre si on boucle
+  if(looping && winLen>0){
+    while(pos >= viewEnd) pos -= winLen;
+  } else if(pos > viewEnd){
+    pos = viewEnd;
+  }
+  drawPlayhead(pos);
+  const r = winLen>0 ? (pos - viewStart)/winLen : 0;
+  pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+  td.textContent=fmt(pos)+' / '+fmt(viewEnd);
+  raf=requestAnimationFrame(loop);
+}
+// Place la tête de lecture (pos en temps réel) relativement à la fenêtre
+function drawPlayhead(pos){
+  if(!drawn) return;
+  const winLen = viewEnd - viewStart;
+  const r = winLen>0 ? (pos - viewStart)/winLen : 0;
+  ph.style.left = (Math.max(0,Math.min(1,r))*100)+'%';
+}
+
+// ── EVENTS ────────────────────────────────────────────────────────────────
+pb.addEventListener('click',()=>{ if(!abuf)return; playing?pause():play(); });
+pr.addEventListener('input',e=>{
+  const r=e.target.value/1000, w=playing; if(w)pause();
+  offset=viewStart + r*(viewEnd-viewStart);
+  pf.style.width=(r*100)+'%'; td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+  drawPlayhead(offset); if(w)play();
+});
+document.querySelectorAll('.sb').forEach(b=>b.addEventListener('click',async()=>{
+  const w=playing;
+  if(w) pause();                       // ralentir relance depuis la position courante
+  speed=parseFloat(b.dataset.s);
+  document.querySelectorAll('.sb').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  if(w) await play();
+}));
+ptg.addEventListener('click',()=>{ showP=!showP; ptg.classList.toggle('on',showP); if(drawn)drawCurve(pc.height); });
+ntg.addEventListener('click',()=>{ showNotes=!showNotes; ntg.classList.toggle('on',showNotes); if(drawn)drawCurve(pc.height); });
+ab.addEventListener('click',async()=>{ if(!abuf)return; const w=playing; if(w)pause(); await analyze(busy); if(w)play(); });
+[pmin,pmax].forEach(el=>el.addEventListener('change',()=>{ if(!spec||!drawn)return; makeCurve(); drawCurve(pc.height); }));
+
+// ── SÉLECTION PAR GLISSEMENT (zoom sur région) ──────────────────────────────
+const viz = sc.parentElement;
+function evX(e){
+  const rect = viz.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  return Math.max(0, Math.min(rect.width, cx)) / rect.width;  // 0..1 dans la fenêtre
+}
+function xToTime(r){ return viewStart + r*(viewEnd-viewStart); }
+
+function selStart(e){
+  if(!drawn) return;
+  // Ne pas démarrer une sélection si le geste vient du badge de zoom (croix, etc.)
+  if(e.target && e.target.closest && e.target.closest('#zoomBadge')) return;
+  selecting=true; selX0=evX(e); selX1=selX0;
+  sel.style.display='block'; selrd.style.display='block';
+  updateSelUI();
+  e.preventDefault();
+}
+function selMove(e){
+  if(!selecting) return;
+  selX1=evX(e); updateSelUI(); e.preventDefault();
+}
+function selEnd(e){
+  if(!selecting) return;
+  selecting=false;
+  const a=Math.min(selX0,selX1), b=Math.max(selX0,selX1);
+  sel.style.display='none'; selrd.style.display='none';
+  // Ignorer les sélections trop petites (tap accidentel)
+  if(b-a < 0.02){ return; }
+  const t0s=xToTime(a), t1s=xToTime(b);
+  viewStart=t0s; viewEnd=t1s; offset=viewStart;
+  clearStretchCache();           // les buffers étirés ne valent plus pour la nouvelle fenêtre
+  setZoomBadge(true);
+  const w=playing; if(w)pause();
+  analyze(busy).then(()=>{ if(w)play(); });
+}
+function setZoomBadge(on){
+  zoomBadge.classList.toggle('on', on);
+  viz.classList.toggle('zoomed', on);
+  if(on) zoomTxt.textContent = fmt(viewStart)+' → '+fmt(viewEnd);
+}
+function updateSelUI(){
+  const a=Math.min(selX0,selX1), b=Math.max(selX0,selX1);
+  sel.style.left=(a*100)+'%'; sel.style.width=((b-a)*100)+'%';
+  selrd.textContent = fmt(xToTime(a))+' → '+fmt(xToTime(b));
+}
+viz.addEventListener('touchstart', selStart, {passive:false});
+viz.addEventListener('touchmove',  selMove,  {passive:false});
+viz.addEventListener('touchend',   selEnd);
+viz.addEventListener('mousedown',  selStart);
+window.addEventListener('mousemove',selMove);
+window.addEventListener('mouseup',  selEnd);
+zoomExit.addEventListener('click', e=>{ e.stopPropagation(); exitZoom(); });
+zoomExit.addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); exitZoom(); });
+
+// ── BOUTONS RÉGION ──────────────────────────────────────────────────────────
+loopBtn.addEventListener('click',()=>{
+  looping=!looping; loopBtn.classList.toggle('on',looping);
+  if(playing && src){
+    if(looping){
+      // Activer la boucle à la volée : la source repartira au début de région à loopEnd
+      src.loop = true;
+    } else {
+      // Désactiver : laisser jouer jusqu'à viewEnd puis stopper, sans relancer
+      src.loop = false;
+      const winLen = viewEnd - viewStart;
+      let pos = offset + (actx.currentTime - t0) * speed;
+      if(winLen>0){ while(pos>=viewEnd) pos-=winLen; }
+      const remainReal = viewEnd - pos;             // temps réel restant
+      clearTimeout(stopTimer);
+      stopTimer = setTimeout(()=>{ if(playing) stopAll(); }, (remainReal/speed)*1000);
+    }
+  }
+});
+function exitZoom(){
+  if(!abuf) return;
+  viewStart=0; viewEnd=dur; offset=0;
+  setZoomBadge(false);
+  clearStretchCache();
+  const w=playing; if(w)pause();
+  analyze(busy).then(()=>{ if(w)play(); });
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────
+function setOv(on,txt,pct){ ov.classList.toggle('on',on); if(txt!==undefined)ot.textContent=txt; if(pct!==undefined)ob.style.width=pct+'%'; }
+function tick(ms){ return new Promise(r=>setTimeout(r,ms||0)); }
+function fmt(s){ s=Math.max(0,s||0); return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'); }
+function setIcon(p){ pi.innerHTML=p?'<rect x="3" y="2" width="4" height="12"/><rect x="9" y="2" width="4" height="12"/>':'<polygon points="4,2 14,8 4,14"/>'; }
+
+// (Removed global touchend preventDefault — it was swallowing button clicks.
+//  Zoom is already disabled via user-scalable=no in the viewport meta tag.)
+</script>
+</body>
+</html>

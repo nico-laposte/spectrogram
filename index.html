@@ -205,30 +205,31 @@ async function load(source){
   await analyze(job);
 }
 
-// ── CHARGEMENT AUTOMATIQUE DEPUIS L'URL (#data=base64) ───────────────────
-async function loadFromHash(){
-  const hash = location.hash;
-  if(!hash.startsWith('#data=')) return;
+// ── CHARGEMENT AUTOMATIQUE DEPUIS input.m4a (déposé par le raccourci) ───────
+// Le raccourci uploade input.m4a dans le dépôt via l'API GitHub.
+// La page le récupère au chargement via un fetch simple sur GitHub Pages.
+// Un paramètre ?t= (timestamp) évite le cache navigateur.
+async function loadFromGithub(){
   setOv(true,'Chargement…',5);
   try {
-    const raw = hash.slice(6);
-    // Diagnostic : afficher les 60 premiers caractères et la longueur totale
-    ilbl.textContent = 'hash: '+raw.length+' chars / début: '+raw.slice(0,40);
-    await tick(1500);  // laisser le temps de lire
-    // Normaliser le Base64 : remplacer les espaces et caractères URL-encodés
-    const b64 = raw.replace(/[\s\r\n]/g,'').replace(/%2B/g,'+').replace(/%2F/g,'/').replace(/%3D/g,'=');
-    const bin = atob(b64);
-    const buf = new Uint8Array(bin.length);
-    for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);
-    history.replaceState(null,'',location.pathname);
-    await load(buf.buffer);
+    const url = 'input.m4a?t=' + Date.now();
+    const resp = await fetch(url);
+    if(!resp.ok) throw new Error('Fichier introuvable ('+resp.status+')');
+    const bytes = await resp.arrayBuffer();
+    await load(bytes);
   } catch(e){
     setOv(false);
-    ilbl.textContent = 'Erreur: '+e.message;
-    console.error('Erreur chargement URL:', e);
+    // Pas d'erreur visible si le fichier n'existe pas encore —
+    // l'utilisateur peut importer manuellement.
+    console.info('Pas de input.m4a disponible:', e.message);
   }
 }
-window.addEventListener('load', ()=>{ if(location.hash.startsWith('#data=')) loadFromHash(); });
+
+// Au chargement : si ?auto dans l'URL, charger input.m4a automatiquement.
+// Le raccourci ouvrira https://nico-laposte.github.io/spectrogram/?auto
+window.addEventListener('load', ()=>{
+  if(location.search.includes('auto')) loadFromGithub();
+});
 
 function fail(file){
   iz.classList.remove('has');

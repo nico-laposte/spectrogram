@@ -216,7 +216,7 @@ async function loadFromHash(){
     ilbl.textContent = 'hash: '+raw.length+' chars / début: '+raw.slice(0,40);
     await tick(1500);  // laisser le temps de lire
     // Normaliser le Base64 : remplacer les espaces et caractères URL-encodés
-    const b64 = raw.replace(/ /g,'+').replace(/%2B/g,'+').replace(/%2F/g,'/').replace(/%3D/g,'=');
+    const b64 = raw.replace(/[\s\r\n]/g,'').replace(/%2B/g,'+').replace(/%2F/g,'/').replace(/%3D/g,'=');
     const bin = atob(b64);
     const buf = new Uint8Array(bin.length);
     for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);

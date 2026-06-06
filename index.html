@@ -140,6 +140,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
     </div>
   </div>
 </div>
+<audio id="iosAudio" playsinline preload="auto" style="display:none"></audio>
 
 <script>
 const MFREQ = 12000, FFTN = 2048, NCOLS = 600;
@@ -524,6 +525,10 @@ async function getPlayBuffer(spd){
 }
 
 // ── PLAYBACK ────────────────────────────────────────────────────────────────
+// Astuce iOS : utiliser aussi un élément <audio>. Safari traite souvent
+// mieux ce chemin pour la sortie audio lorsque le téléphone est en silencieux.
+const iosAudio = document.getElementById('iosAudio');
+
 // On joue playBuf à playbackRate=1 → hauteur préservée.
 // Lecture confinée à la fenêtre visible [viewStart, viewEnd] (temps réel).
 // Le buffer étiré a une échelle = temps_réel / speed.
@@ -554,6 +559,26 @@ async function ensureContext(){
   clearStretchCache();   // les buffers étirés appartenaient à l'ancien contexte
 }
 
+
+async function bufferToWavURL(buf){
+  const data = buf.getChannelData(0);
+  const sr = buf.sampleRate;
+  const bytes = new ArrayBuffer(44 + data.length * 2);
+  const v = new DataView(bytes);
+  const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  w(0,'RIFF'); v.setUint32(4,36+data.length*2,true); w(8,'WAVE');
+  w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,1,true); v.setUint32(24,sr,true);
+  v.setUint32(28,sr*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  w(36,'data'); v.setUint32(40,data.length*2,true);
+  let o=44;
+  for(let i=0;i<data.length;i++){
+    const s=Math.max(-1,Math.min(1,data[i]));
+    v.setInt16(o,s<0?s*32768:s*32767,true); o+=2;
+  }
+  return URL.createObjectURL(new Blob([bytes],{type:'audio/wav'}));
+}
+
 async function play(){
   if(!abuf) return;
   clearTimeout(stopTimer);
@@ -568,6 +593,12 @@ async function play(){
   }catch(e){}
   await ensureContext();
   playBuf = await getPlayBuffer(speed);
+  try{
+    const u = await bufferToWavURL(playBuf);
+    iosAudio.src = u;
+    iosAudio.currentTime = (offset / speed);
+    await iosAudio.play();
+  }catch(e){ console.warn('audio element fallback:', e); }
   stopSrc();
   src=actx.createBufferSource(); src.buffer=playBuf;
   src.playbackRate.value=1; src.connect(actx.destination);

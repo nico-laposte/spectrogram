@@ -70,7 +70,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 #zoomBadge.on{display:flex}
 #zoomTxt{font-size:10px;color:var(--acc2);white-space:nowrap}
 #zoomExit{width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:var(--acc2);color:#0a0f0a;border:none;border-radius:50%;font-family:'DM Mono',monospace;font-size:12px;line-height:1;padding:0}
-#panLeft,#panRight{width:20px;height:20px;display:flex;align-items:center;justify-content:center;background:none;border:none;color:var(--acc2);font-size:11px;padding:0;cursor:pointer}
+#panLeft,#panRight{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(240,200,74,.15);border:1px solid var(--acc2);border-radius:6px;color:var(--acc2);font-size:13px;padding:0;cursor:pointer}
+#panLeft:disabled,#panRight:disabled{opacity:.25;cursor:default}
 .viz.zoomed{border-color:var(--acc2);box-shadow:inset 0 0 0 1px rgba(240,200,74,.4)}
 .pl{width:36px;height:20px;background:var(--bdr);border-radius:10px;position:relative;border:none;flex-shrink:0;transition:background .2s}
 .pl.on{background:rgba(240,200,74,.3)}
@@ -929,7 +930,7 @@ function selEnd(e){
 function setZoomBadge(on){
   zoomBadge.classList.toggle('on', on);
   viz.classList.toggle('zoomed', on);
-  if(on) zoomTxt.textContent = fmt(viewStart)+' → '+fmt(viewEnd);
+  if(on){ zoomTxt.textContent = fmt(viewStart)+' → '+fmt(viewEnd); updatePanButtons(); }
 }
 function updateSelUI(){
   const a=Math.min(selX0,selX1), b=Math.max(selX0,selX1);
@@ -945,20 +946,39 @@ window.addEventListener('mouseup',  selEnd);
 zoomExit.addEventListener('click', e=>{ e.stopPropagation(); exitZoom(); });
 zoomExit.addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); exitZoom(); });
 
+function updatePanButtons(){
+  const pl=document.getElementById('panLeft');
+  const pr=document.getElementById('panRight');
+  if(!pl||!pr) return;
+  pl.disabled = viewStart <= 0;
+  pr.disabled = viewEnd >= dur;
+}
+
 function panView(dir){
-  if(!abuf || viewEnd >= dur && viewStart <= 0) return;
+  if(!abuf) return;
   const winLen = viewEnd - viewStart;
-  const step = winLen * 0.5;  // décalage d'une demi-fenêtre
+  const step = winLen * 0.5;
   let ns = viewStart + dir*step;
   let ne = viewEnd   + dir*step;
   if(ns < 0){ ne -= ns; ns = 0; }
   if(ne > dur){ ns -= (ne-dur); ne = dur; }
   viewStart = Math.max(0,ns); viewEnd = Math.min(dur,ne);
   setZoomBadge(true);
+  updatePanButtons();
   const w=playing; if(w) pause();
   ph.style.display='none';
   clearStretchCache();
-  analyze(busy).then(()=>{ ph.style.display='block'; drawPlayhead(offset); if(w)play(); });
+  analyze(busy).then(()=>{
+    // Recadrer offset dans la nouvelle fenêtre
+    if(offset < viewStart) offset = viewStart;
+    if(offset > viewEnd)   offset = viewEnd;
+    const winLen = viewEnd - viewStart;
+    const r = winLen>0 ? (offset-viewStart)/winLen : 0;
+    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    ph.style.display='block'; drawPlayhead(offset);
+    if(w)play();
+  });
 }
 document.getElementById('panLeft').addEventListener('click',  e=>{ e.stopPropagation(); panView(-1); });
 document.getElementById('panLeft').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); panView(-1); });

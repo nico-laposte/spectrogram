@@ -214,22 +214,20 @@ async function load(source){
 // ── CHARGEMENT AUTOMATIQUE DEPUIS L'URL (#data=base64) ───────────────────
 async function loadFromGithub(){
   setOv(true,'Chargement…',5);
-  const MAX_TRIES = 3, DELAY = 5000;
-  for(let i=0; i<MAX_TRIES; i++){
-    try {
-      const resp = await fetch('input.m4a?t=' + Date.now());
-      if(resp.ok){
-        const bytes = await resp.arrayBuffer();
-        await load(bytes);
-        return;
-      }
-    } catch(e){ console.warn('fetch '+(i+1)+':', e.message); }
-    if(i < MAX_TRIES-1){
-      setOv(true, 'Chargement… ('+(i+2)+'/'+MAX_TRIES+')', 5+Math.round((i+1)/MAX_TRIES*40));
-      await tick(DELAY);
-    }
+  try {
+    // API GitHub : disponible immédiatement après upload, sans délai Pages
+    // Dépôt public → pas de token requis en lecture
+    const resp = await fetch(
+      'https://api.github.com/repos/nico-laposte/spectrogram/contents/input.m4a',
+      { headers: { 'Accept': 'application/vnd.github.v3.raw' } }
+    );
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const bytes = await resp.arrayBuffer();
+    await load(bytes);
+  } catch(e){
+    setOv(false);
+    console.warn('loadFromGithub:', e.message);
   }
-  setOv(false);
 }
 window.addEventListener('load', ()=>{
   if(location.search.includes('auto') || location.href.includes('auto')) loadFromGithub();
@@ -616,9 +614,11 @@ async function play(){
 function pause(){
   if(!playing) return;
   clearTimeout(stopTimer);
-  offset += (actx.currentTime - t0) * speed;
+  // iosAudio.currentTime est en secondes dans le buffer étiré → multiplier par speed pour revenir en temps réel
+  offset = viewStart + iosAudio.currentTime * speed;
   if(offset > viewEnd) offset = viewEnd;
-  iosAudio.pause();   // ← correction : pause iosAudio aussi
+  if(offset < viewStart) offset = viewStart;
+  iosAudio.pause();
   stopSrc();
   playing=false; setIcon(false); cancelAnimationFrame(raf);
 }
@@ -713,14 +713,24 @@ function selEnd(e){
   // Ignorer les sélections trop petites (tap accidentel)
   if(b-a < 0.02){ return; }
   const t0s=xToTime(a), t1s=xToTime(b);
-  // Conserver la position courante si elle est dans la région zoomée, sinon revenir au début
-  const currentPos = playing ? (offset + (actx ? (actx.currentTime - t0) * speed : 0)) : offset;
+  // Capturer la position courante AVANT la pause (pause() modifie offset)
+  const currentPos = playing
+    ? Math.min(viewEnd, Math.max(viewStart, viewStart + iosAudio.currentTime * speed))
+    : offset;
+  const w=playing; if(w) pause();
   viewStart=t0s; viewEnd=t1s;
   offset = (currentPos >= t0s && currentPos < t1s) ? currentPos : t0s;
-  clearStretchCache();           // les buffers étirés ne valent plus pour la nouvelle fenêtre
+  clearStretchCache();
   setZoomBadge(true);
-  const w=playing; if(w)pause();
-  analyze(busy).then(()=>{ if(w)play(); });
+  analyze(busy).then(()=>{
+    // Repositionner la tête au bon endroit après le redessin
+    const winLen = viewEnd - viewStart;
+    const r = winLen>0 ? (offset - viewStart)/winLen : 0;
+    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    drawPlayhead(offset);
+    if(w) play();
+  });
 }
 function setZoomBadge(on){
   zoomBadge.classList.toggle('on', on);
@@ -762,11 +772,25 @@ loopBtn.addEventListener('click',()=>{
 });
 function exitZoom(){
   if(!abuf) return;
-  viewStart=0; viewEnd=dur; offset=0;
+  // DIAGNOSTIC : afficher les valeurs réelles
+  const iosCT = iosAudio.currentTime;
+  const iosDur = iosAudio.duration;
+  td.textContent = 'ct:'+iosCT.toFixed(2)+' dur:'+iosDur.toFixed(2)+' vs:'+viewStart.toFixed(2)+' spd:'+speed;
+  const currentPos = playing
+    ? Math.min(viewEnd, Math.max(viewStart, viewStart + iosCT * speed))
+    : offset;
+  const w=playing; if(w) pause();
+  viewStart=0; viewEnd=dur;
+  offset = currentPos;
   setZoomBadge(false);
   clearStretchCache();
-  const w=playing; if(w)pause();
-  analyze(busy).then(()=>{ if(w)play(); });
+  analyze(busy).then(()=>{
+    const winLen = viewEnd - viewStart;
+    const r = winLen>0 ? (offset - viewStart)/winLen : 0;
+    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+    drawPlayhead(offset);
+    if(w) play();
+  });
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────────────

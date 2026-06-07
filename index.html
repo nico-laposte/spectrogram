@@ -750,12 +750,14 @@ function selEnd(e){
   offset = (currentPos >= t0s && currentPos < t1s) ? currentPos : t0s;
   clearStretchCache();
   setZoomBadge(true);
+  ph.style.display='none';
   analyze(busy).then(()=>{
     // Repositionner la tête au bon endroit après le redessin
     const winLen = viewEnd - viewStart;
     const r = winLen>0 ? (offset - viewStart)/winLen : 0;
     pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
     td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    ph.style.display='block';
     drawPlayhead(offset);
     if(w) play();
   });
@@ -808,11 +810,13 @@ function exitZoom(){
   offset = currentPos;
   setZoomBadge(false);
   clearStretchCache();
+  ph.style.display='none';
   analyze(busy).then(()=>{
     const winLen = viewEnd - viewStart;
     const r = winLen>0 ? (offset - viewStart)/winLen : 0;
     pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
     td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    ph.style.display='block';
     drawPlayhead(offset);
     if(w) play();
   });

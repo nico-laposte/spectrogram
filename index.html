@@ -60,15 +60,14 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 .fic label{font-size:9px;color:var(--mut)}
 .fic input{width:62px;height:28px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-family:'DM Mono',monospace;font-size:11px;text-align:center;-webkit-appearance:none}
 .fic input:focus{outline:none;border-color:var(--acc)}
-#ab{height:34px;flex:1;background:rgba(126,207,110,.08);border:1px solid var(--acc);border-radius:8px;color:var(--acc);font-family:'DM Mono',monospace;font-size:11px;display:none}
-#ab.on{display:block}
+
 .dot{width:8px;height:8px;border-radius:50%;background:rgb(255,80,80);flex-shrink:0}
 #sel{position:absolute;top:0;bottom:0;background:rgba(126,207,110,.15);border-left:1.5px solid var(--acc);border-right:1.5px solid var(--acc);display:none;pointer-events:none}
 #selrd{position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--acc);background:rgba(10,15,10,.8);padding:3px 8px;border-radius:6px;display:none;pointer-events:none;white-space:nowrap}
 .rbtn{height:32px;padding:0 12px;background:var(--surf);border:1px solid var(--bdr);border-radius:8px;color:var(--mut);font-family:'DM Mono',monospace;font-size:11px}
 .rbtn.on{background:rgba(126,207,110,.1);border-color:var(--acc);color:var(--acc)}
 .rbtn:disabled{opacity:.35}
-#zoomBadge{position:absolute;top:6px;right:6px;display:none;align-items:center;gap:8px;background:rgba(240,200,74,.14);border:1px solid var(--acc2);border-radius:8px;padding:4px 6px 4px 10px}
+#zoomBadge{position:absolute;top:6px;right:6px;display:none;align-items:center;gap:8px;background:rgba(240,200,74,.14);border:1px solid var(--acc2);border-radius:8px;padding:4px 6px 4px 10px;z-index:20}
 #zoomBadge.on{display:flex}
 #zoomTxt{font-size:10px;color:var(--acc2);white-space:nowrap}
 #zoomExit{width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:var(--acc2);color:#0a0f0a;border:none;border-radius:50%;font-family:'DM Mono',monospace;font-size:12px;line-height:1;padding:0}
@@ -136,8 +135,6 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
       <button class="pl on" id="ptg"></button>
       <div class="rl" style="min-width:0;margin-left:14px">Notes</div>
       <button class="pl on" id="ntg"></button>
-      <div style="flex:1"></div>
-      <button id="ab">↻ Relancer</button>
     </div>
     <div class="row">
       <div class="rl">Région</div>
@@ -160,7 +157,7 @@ let stopTimer=null;
 const $ = id => document.getElementById(id);
 const iz=$('iz'), ilbl=$('ilbl'), tip=$('tip'), sc=$('sc'), pc=$('pc'), ph=$('ph');
 const flbl=$('flbl'), tlbl=$('tlbl'), em=$('em'), ov=$('ov'), ot=$('ot'), ob=$('ob');
-const pb=$('pb'), rwb=$('rwb'), pi=$('pi'), pf=$('pf'), pr=$('pr'), td=$('td'), ab=$('ab'), ptg=$('ptg'), ntg=$('ntg');
+const pb=$('pb'), rwb=$('rwb'), pi=$('pi'), pf=$('pf'), pr=$('pr'), td=$('td'), ptg=$('ptg'), ntg=$('ntg');
 const pmin=$('pmin'), pmax=$('pmax');
 const sel=$('sel'), selrd=$('selrd'), loopBtn=$('loopBtn');
 const zoomBadge=$('zoomBadge'), zoomTxt=$('zoomTxt'), zoomExit=$('zoomExit');
@@ -203,11 +200,11 @@ async function load(source){
   dur = abuf.duration;
   viewStart = 0; viewEnd = dur; offset = 0;
   clearStretchCache();
+  setZoomBadge(false);   // réinitialiser le zoom au chargement d'un nouveau fichier
   ilbl.textContent = name;
   iz.classList.add('has');
   em.style.display='none';
   pb.disabled=false; rwb.disabled=false;
-  ab.classList.add('on');
   await analyze(job);
 }
 
@@ -299,6 +296,11 @@ async function analyze(job){
     timeLabels();
   }catch(err){ console.error('draw error:', err); }
   drawn=true;
+  // Afficher le curseur dès la fin de l'analyse pour permettre le drag immédiat
+  if(!playing){
+    ph.style.display='block';
+    drawPlayhead(offset);
+  }
   setOv(false);
 }
 
@@ -590,7 +592,8 @@ async function play(){
   src.playbackRate.value=1; src.connect(actx.destination);
 
   const lo = viewStart / speed, hi = viewEnd / speed;
-  if(offset < viewStart || offset >= viewEnd) offset = viewStart;
+  if(offset < viewStart) offset = viewStart;
+  if(offset >= viewEnd) offset = viewStart;  // hors région → retour début seulement si dépassement réel
   const bufOffset = offset / speed;
 
   src.loop = looping;
@@ -676,8 +679,13 @@ document.querySelectorAll('.sb').forEach(b=>b.addEventListener('click',async()=>
 }));
 ptg.addEventListener('click',()=>{ showP=!showP; ptg.classList.toggle('on',showP); if(drawn)drawCurve(pc.height); });
 ntg.addEventListener('click',()=>{ showNotes=!showNotes; ntg.classList.toggle('on',showNotes); if(drawn)drawCurve(pc.height); });
-ab.addEventListener('click',async()=>{ if(!abuf)return; const w=playing; if(w)pause(); await analyze(busy); if(w)play(); });
-[pmin,pmax].forEach(el=>el.addEventListener('change',()=>{ if(!spec||!drawn)return; makeCurve(); drawCurve(pc.height); }));
+// Recalcul automatique quand les champs pitch min/max changent
+[pmin,pmax].forEach(el=>el.addEventListener('change',async()=>{
+  if(!abuf||!drawn) return;
+  const w=playing; if(w) pause();
+  await analyze(busy);
+  if(w) play();
+}));
 
 // ── SÉLECTION PAR GLISSEMENT (zoom sur région) ──────────────────────────────
 const viz = sc.parentElement;
@@ -722,6 +730,7 @@ function selMove(e){
 function selEnd(e){
   if(draggingPH){
     draggingPH=false;
+    play();   // reprendre depuis le nouvel offset
     e.preventDefault(); return;
   }
   if(!selecting) return;

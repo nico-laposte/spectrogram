@@ -792,14 +792,13 @@ async function play(){
   if(offset >= viewEnd) offset = viewStart;  // hors région → retour début seulement si dépassement réel
   const bufOffset = offset / speed;
 
-  src.loop = looping;
+  src.loop = true;   // toujours en boucle native — c'est loop() qui gère l'arrêt
   src.loopStart = lo;
   src.loopEnd   = hi;
 
   t0=actx.currentTime;
   try{
-    if(looping){ src.start(0, bufOffset); }
-    else { src.start(0, bufOffset, Math.max(0.01, hi - bufOffset)); }
+    src.start(0, bufOffset);
   }catch(err){ console.error('start error:', err); return; }
   playing=true; setIcon(true); ph.style.display='block';
   src.onended=()=>{ if(playing){ stopAll(); } };
@@ -835,13 +834,23 @@ function loop(){
   if(!playing)return;
   const winLen = viewEnd - viewStart;
   let pos = offset + (actx.currentTime - t0) * speed;
-  // repli dans la fenêtre si on boucle
   if(looping && winLen>0){
     while(pos >= viewEnd) pos -= winLen;
-  } else if(pos > viewEnd){
-    pos = viewEnd;
+  } else if(pos >= viewEnd){
+    // Fin naturelle sans boucle → curseur reste à la fin
+    currentPlayPos = viewEnd;
+    stopSrc();
+    iosAudio.pause();
+    playing=false; setIcon(false); cancelAnimationFrame(raf);
+    offset = viewEnd;
+    if(drawn){
+      drawPlayhead(viewEnd);
+      pf.style.width='100%'; pr.value=1000;
+      td.textContent=fmt(viewEnd)+' / '+fmt(viewEnd);
+    }
+    return;
   }
-  currentPlayPos = pos;  // source de vérité pour pause()
+  currentPlayPos = pos;
   drawPlayhead(pos);
   const r = winLen>0 ? (pos - viewStart)/winLen : 0;
   pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
@@ -1045,20 +1054,11 @@ document.getElementById('panRight').addEventListener('touchend', e=>{ e.stopProp
 // ── BOUTONS RÉGION ──────────────────────────────────────────────────────────
 loopBtn.addEventListener('click',()=>{
   looping=!looping; loopBtn.classList.toggle('on',looping);
-  if(playing && src){
-    if(looping){
-      // Activer la boucle à la volée : la source repartira au début de région à loopEnd
-      src.loop = true;
-    } else {
-      // Désactiver : laisser jouer jusqu'à viewEnd puis stopper, sans relancer
-      src.loop = false;
-      const winLen = viewEnd - viewStart;
-      let pos = offset + (actx.currentTime - t0) * speed;
-      if(winLen>0){ while(pos>=viewEnd) pos-=winLen; }
-      const remainReal = viewEnd - pos;             // temps réel restant
-      clearTimeout(stopTimer);
-      stopTimer = setTimeout(()=>{ if(playing) stopAll(); }, (remainReal/speed)*1000);
-    }
+  if(playing && !looping){
+    // Recalibrer offset/t0 avec la position exacte actuelle
+    // pour éviter que loop() détecte une fausse fin de région
+    offset = currentPlayPos;
+    t0 = actx.currentTime;
   }
 });
 function exitZoom(){

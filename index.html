@@ -66,10 +66,11 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 #selrd{position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--acc);background:rgba(10,15,10,.8);padding:3px 8px;border-radius:6px;display:none;pointer-events:none;white-space:nowrap}
 .trsp-btn{width:30px;height:30px;border-radius:50%;background:var(--surf);border:1px solid var(--bdr);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--mut)}
 .trsp-btn.on{border-color:var(--acc);color:var(--acc);background:rgba(126,207,110,.08)}
-#zoomBadge{position:absolute;top:6px;right:6px;display:none;align-items:center;gap:8px;background:rgba(240,200,74,.14);border:1px solid var(--acc2);border-radius:8px;padding:4px 6px 4px 10px;z-index:20}
+#zoomBadge{position:absolute;top:6px;right:6px;display:none;align-items:center;gap:6px;background:rgba(240,200,74,.14);border:1px solid var(--acc2);border-radius:8px;padding:4px 6px;z-index:20}
 #zoomBadge.on{display:flex}
 #zoomTxt{font-size:10px;color:var(--acc2);white-space:nowrap}
 #zoomExit{width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:var(--acc2);color:#0a0f0a;border:none;border-radius:50%;font-family:'DM Mono',monospace;font-size:12px;line-height:1;padding:0}
+#panLeft,#panRight{width:20px;height:20px;display:flex;align-items:center;justify-content:center;background:none;border:none;color:var(--acc2);font-size:11px;padding:0;cursor:pointer}
 .viz.zoomed{border-color:var(--acc2);box-shadow:inset 0 0 0 1px rgba(240,200,74,.4)}
 .pl{width:36px;height:20px;background:var(--bdr);border-radius:10px;position:relative;border:none;flex-shrink:0;transition:background .2s}
 .pl.on{background:rgba(240,200,74,.3)}
@@ -96,7 +97,12 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
     <div class="fl" id="flbl"></div>
     <div class="tl" id="tlbl"></div>
     <div id="selrd"></div>
-    <div id="zoomBadge"><span id="zoomTxt"></span><button id="zoomExit" aria-label="Vue complète">✕</button></div>
+    <div id="zoomBadge">
+      <button id="panLeft" aria-label="Décaler gauche">◀</button>
+      <span id="zoomTxt"></span>
+      <button id="panRight" aria-label="Décaler droite">▶</button>
+      <button id="zoomExit" aria-label="Vue complète">✕</button>
+    </div>
     <div class="em" id="em">
       <svg width="36" height="36" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.2">
         <circle cx="20" cy="20" r="14"/><path d="M15 16c0-2.8 2.2-5 5-5s5 2.2 5 5v6" stroke-linecap="round"/><circle cx="20" cy="25" r="2" fill="currentColor"/>
@@ -165,7 +171,6 @@ let curve=[], spec=null;
 // Fenêtre visible (zoom) en secondes + mode boucle + sélection en cours
 let viewStart=0, viewEnd=0, looping=true;
 let selX0=null, selX1=null, selecting=false, draggingPH=false, draggingPHWasPlaying=false;
-let panning=false, panStartX=0, panStartViewStart=0, panStartViewEnd=0;
 let stopTimer=null;
 
 const $ = id => document.getElementById(id);
@@ -859,16 +864,7 @@ function selStart(e){
   if(!drawn) return;
   if(e.target && e.target.closest && e.target.closest('#zoomBadge')) return;
 
-  // Deux doigts en mode zoom → pan
-  if(e.touches && e.touches.length === 2 && viewEnd < dur){
-    panning=true;
-    const rect=viz.getBoundingClientRect();
-    panStartX=(e.touches[0].clientX+e.touches[1].clientX)/2 - rect.left;
-    panStartViewStart=viewStart; panStartViewEnd=viewEnd;
-    e.preventDefault(); return;
-  }
-
-  // Si le touch est sur le curseur (#ph), démarrer un drag de position
+  // Un doigt sur le curseur → drag de position
   if(e.target && e.target.closest && e.target.closest('#ph')){
     draggingPH=true;
     draggingPHWasPlaying=playing;
@@ -882,21 +878,6 @@ function selStart(e){
   e.preventDefault();
 }
 function selMove(e){
-  if(panning && e.touches && e.touches.length === 2){
-    const rect=viz.getBoundingClientRect();
-    const cx=(e.touches[0].clientX+e.touches[1].clientX)/2 - rect.left;
-    const dx=(panStartX - cx)/rect.width;  // déplacement relatif (0..1)
-    const winLen=panStartViewEnd-panStartViewStart;
-    let ns=panStartViewStart + dx*winLen;
-    let ne=panStartViewEnd   + dx*winLen;
-    // limiter aux bornes du fichier
-    if(ns<0){ne-=ns; ns=0;}
-    if(ne>dur){ns-=(ne-dur); ne=dur;}
-    viewStart=Math.max(0,ns); viewEnd=Math.min(dur,ne);
-    setZoomBadge(true);
-    drawPlayhead(offset);
-    e.preventDefault(); return;
-  }
   if(draggingPH){
     const r=evX(e);
     offset=xToTime(r);
@@ -912,18 +893,6 @@ function selMove(e){
   selX1=evX(e); updateSelUI(); e.preventDefault();
 }
 function selEnd(e){
-  if(panning){
-    panning=false;
-    // Relancer l'analyse sur la nouvelle fenêtre
-    const w=playing; if(w) pause();
-    ph.style.display='none';
-    clearStretchCache();
-    analyze(busy).then(()=>{
-      ph.style.display='block'; drawPlayhead(offset);
-      if(w) play();
-    });
-    e.preventDefault(); return;
-  }
   if(draggingPH){
     draggingPH=false;
     if(draggingPHWasPlaying) play();
@@ -975,6 +944,26 @@ window.addEventListener('mousemove',selMove);
 window.addEventListener('mouseup',  selEnd);
 zoomExit.addEventListener('click', e=>{ e.stopPropagation(); exitZoom(); });
 zoomExit.addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); exitZoom(); });
+
+function panView(dir){
+  if(!abuf || viewEnd >= dur && viewStart <= 0) return;
+  const winLen = viewEnd - viewStart;
+  const step = winLen * 0.5;  // décalage d'une demi-fenêtre
+  let ns = viewStart + dir*step;
+  let ne = viewEnd   + dir*step;
+  if(ns < 0){ ne -= ns; ns = 0; }
+  if(ne > dur){ ns -= (ne-dur); ne = dur; }
+  viewStart = Math.max(0,ns); viewEnd = Math.min(dur,ne);
+  setZoomBadge(true);
+  const w=playing; if(w) pause();
+  ph.style.display='none';
+  clearStretchCache();
+  analyze(busy).then(()=>{ ph.style.display='block'; drawPlayhead(offset); if(w)play(); });
+}
+document.getElementById('panLeft').addEventListener('click',  e=>{ e.stopPropagation(); panView(-1); });
+document.getElementById('panLeft').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); panView(-1); });
+document.getElementById('panRight').addEventListener('click',  e=>{ e.stopPropagation(); panView(1); });
+document.getElementById('panRight').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); panView(1); });
 
 // ── BOUTONS RÉGION ──────────────────────────────────────────────────────────
 loopBtn.addEventListener('click',()=>{

@@ -432,7 +432,7 @@ function labelHeldNotes(ctx,W,H,yOf){
   ctx.textBaseline='top';
   for(const L of labels){
     const w=ctx.measureText(L.lab).width;
-    let y=L.y-16;                      // au-dessus du point de la courbe
+    let y=L.y-28;                      // au-dessus du point de la courbe
     if(y < 0) y=L.y+5;                 // si trop haut, repasser en dessous
     ctx.fillStyle='rgba(10,15,10,.55)';
     ctx.fillRect(L.x-w/2-2, y, w+4, 11);

@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0a0f0a">
-<title>Spectrogramme — Analyse Sonore</title>
+<title>Merle — Analyse Sonore</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400&family=Cormorant+Garamond:ital,wght@1,300&display=swap');
 :root{--bg:#0a0f0a;--surf:#111a11;--bdr:#1e2e1e;--acc:#7ecf6e;--acc2:#f0c84a;--txt:#c8d8c0;--mut:#4a5e44}
@@ -85,6 +85,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
     <div><div class="lbl" id="ilbl">Importer un fichier audio</div><div class="sub">mp3 · m4a · wav · aac</div></div>
     <input type="file" id="fi" accept="audio/*,video/*,.mov,.mp4,.m4a,.mp3,.wav,.aac">
   </div>
+  <audio id="iosAudio" playsinline preload="auto" style="display:none"></audio>
   <div class="tip" id="tip"></div>
 
   <div class="viz">
@@ -140,7 +141,6 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
     </div>
   </div>
 </div>
-<audio id="iosAudio" playsinline preload="auto" style="display:none"></audio>
 
 <script>
 const MFREQ = 12000, FFTN = 2048, NCOLS = 600;
@@ -160,6 +160,8 @@ const pb=$('pb'), pi=$('pi'), pf=$('pf'), pr=$('pr'), td=$('td'), ab=$('ab'), pt
 const pmin=$('pmin'), pmax=$('pmax');
 const sel=$('sel'), selrd=$('selrd'), loopBtn=$('loopBtn');
 const zoomBadge=$('zoomBadge'), zoomTxt=$('zoomTxt'), zoomExit=$('zoomExit');
+const iosAudio=$('iosAudio');
+let iosAudioURL=null;
 
 // ── IMPORT ────────────────────────────────────────────────────────────────
 $('fi').addEventListener('change', e => { const f=e.target.files[0]; if(f) load(f); });
@@ -206,26 +208,19 @@ async function load(source){
   await analyze(job);
 }
 
-// ── CHARGEMENT AUTOMATIQUE DEPUIS input.m4a (déposé par le raccourci) ───────
-// Le raccourci uploade input.m4a dans le dépôt via l'API GitHub.
-// La page le récupère au chargement via un fetch simple sur GitHub Pages.
-// Un paramètre ?t= (timestamp) évite le cache navigateur.
+// ── CHARGEMENT AUTOMATIQUE DEPUIS L'URL (#data=base64) ───────────────────
 async function loadFromGithub(){
   setOv(true,'Chargement…',5);
-  const MAX_TRIES = 3;
-  const DELAY    = 5000;
+  const MAX_TRIES = 3, DELAY = 5000;
   for(let i=0; i<MAX_TRIES; i++){
     try {
-      const url  = 'input.m4a?t=' + Date.now();
-      const resp = await fetch(url);
+      const resp = await fetch('input.m4a?t=' + Date.now());
       if(resp.ok){
         const bytes = await resp.arrayBuffer();
         await load(bytes);
         return;
       }
-    } catch(e){
-      console.warn('Fetch essai '+(i+1)+' :', e.message);
-    }
+    } catch(e){ console.warn('fetch '+(i+1)+':', e.message); }
     if(i < MAX_TRIES-1){
       setOv(true, 'Chargement… ('+(i+2)+'/'+MAX_TRIES+')', 5+Math.round((i+1)/MAX_TRIES*40));
       await tick(DELAY);
@@ -233,13 +228,8 @@ async function loadFromGithub(){
   }
   setOv(false);
 }
-
-// Au chargement : si ?auto dans l'URL, charger input.m4a automatiquement.
-// Le raccourci ouvrira https://nico-laposte.github.io/spectrogram/?auto
 window.addEventListener('load', ()=>{
-  if(location.search.includes('auto') || location.href.includes('auto')){
-    loadFromGithub();
-  }
+  if(location.search.includes('auto') || location.href.includes('auto')) loadFromGithub();
 });
 
 function fail(file){
@@ -525,10 +515,6 @@ async function getPlayBuffer(spd){
 }
 
 // ── PLAYBACK ────────────────────────────────────────────────────────────────
-// Astuce iOS : utiliser aussi un élément <audio>. Safari traite souvent
-// mieux ce chemin pour la sortie audio lorsque le téléphone est en silencieux.
-const iosAudio = document.getElementById('iosAudio');
-
 // On joue playBuf à playbackRate=1 → hauteur préservée.
 // Lecture confinée à la fenêtre visible [viewStart, viewEnd] (temps réel).
 // Le buffer étiré a une échelle = temps_réel / speed.
@@ -559,7 +545,8 @@ async function ensureContext(){
   clearStretchCache();   // les buffers étirés appartenaient à l'ancien contexte
 }
 
-
+// Convertit un AudioBuffer en URL WAV pour le lire via <audio> natif
+// → iOS traite ça comme du multimédia → passe le mode silencieux
 async function bufferToWavURL(buf){
   const data = buf.getChannelData(0);
   const sr = buf.sampleRate;
@@ -576,60 +563,70 @@ async function bufferToWavURL(buf){
     const s=Math.max(-1,Math.min(1,data[i]));
     v.setInt16(o,s<0?s*32768:s*32767,true); o+=2;
   }
-  return URL.createObjectURL(new Blob([bytes],{type:'audio/wav'}));
+  if(iosAudioURL){ URL.revokeObjectURL(iosAudioURL); }
+  iosAudioURL = URL.createObjectURL(new Blob([bytes],{type:'audio/wav'}));
+  return iosAudioURL;
 }
 
 async function play(){
   if(!abuf) return;
   clearTimeout(stopTimer);
-  // DÉBLOCAGE SYNCHRONE dans le geste tactile, AVANT tout await :
-  // jouer un échantillon muet réveille le contexte sur iOS.
   try{
-    if(actx){
-      actx.resume();
+    if(actx){ actx.resume();
       const b=actx.createBuffer(1,1,actx.sampleRate);
       const s=actx.createBufferSource(); s.buffer=b; s.connect(actx.destination); s.start(0);
     }
   }catch(e){}
   await ensureContext();
   playBuf = await getPlayBuffer(speed);
+
+  // Jouer via <audio> natif pour passer le mode silencieux iOS
   try{
     const u = await bufferToWavURL(playBuf);
     iosAudio.src = u;
-    iosAudio.currentTime = (offset / speed);
+    iosAudio.currentTime = offset / speed;
     await iosAudio.play();
-  }catch(e){ console.warn('audio element fallback:', e); }
+  }catch(e){ console.warn('iosAudio.play:', e); }
+
   stopSrc();
   src=actx.createBufferSource(); src.buffer=playBuf;
   src.playbackRate.value=1; src.connect(actx.destination);
 
-  // Bornes de la fenêtre dans le buffer étiré (secondes)
   const lo = viewStart / speed, hi = viewEnd / speed;
   if(offset < viewStart || offset >= viewEnd) offset = viewStart;
   const bufOffset = offset / speed;
 
-  // Toujours définir les bornes de boucle (permet d'activer src.loop à la volée)
   src.loop = looping;
   src.loopStart = lo;
   src.loopEnd   = hi;
 
   t0=actx.currentTime;
   try{
-    if(looping){
-      src.start(0, bufOffset);
-    } else {
-      const remain = hi - bufOffset;
-      src.start(0, bufOffset, Math.max(0.01, remain));
-    }
-  }catch(err){
-    console.error('start error:', err); return;
-  }
+    if(looping){ src.start(0, bufOffset); }
+    else { src.start(0, bufOffset, Math.max(0.01, hi - bufOffset)); }
+  }catch(err){ console.error('start error:', err); return; }
   playing=true; setIcon(true); ph.style.display='block';
-  src.onended=()=>{ if(playing){ stopAll(); } };  // déclenché à la fin en lecture unique
+  src.onended=()=>{ if(playing){ stopAll(); } };
   loop();
 }
-function pause(){ if(!playing)return; clearTimeout(stopTimer); offset+=(actx.currentTime-t0)*speed; if(offset>viewEnd)offset=viewEnd; stopSrc(); playing=false; setIcon(false); cancelAnimationFrame(raf); }
-function stopAll(){ clearTimeout(stopTimer); stopSrc(); playing=false; offset=viewStart; setIcon(false); ph.style.display='none'; cancelAnimationFrame(raf); drawPlayhead(viewStart); }
+
+function pause(){
+  if(!playing) return;
+  clearTimeout(stopTimer);
+  offset += (actx.currentTime - t0) * speed;
+  if(offset > viewEnd) offset = viewEnd;
+  iosAudio.pause();   // ← correction : pause iosAudio aussi
+  stopSrc();
+  playing=false; setIcon(false); cancelAnimationFrame(raf);
+}
+
+function stopAll(){
+  clearTimeout(stopTimer);
+  iosAudio.pause(); iosAudio.src='';   // ← correction : stopper iosAudio aussi
+  stopSrc();
+  playing=false; offset=viewStart; setIcon(false);
+  ph.style.display='none'; cancelAnimationFrame(raf); drawPlayhead(viewStart);
+}
 function stopSrc(){ if(src){src.onended=null;try{src.stop();}catch(e){}src.disconnect();src=null;} }
 function loop(){
   if(!playing)return;

@@ -165,6 +165,7 @@ let curve=[], spec=null;
 // Fenêtre visible (zoom) en secondes + mode boucle + sélection en cours
 let viewStart=0, viewEnd=0, looping=true;
 let selX0=null, selX1=null, selecting=false, draggingPH=false, draggingPHWasPlaying=false;
+let panning=false, panStartX=0, panStartViewStart=0, panStartViewEnd=0;
 let stopTimer=null;
 
 const $ = id => document.getElementById(id);
@@ -858,6 +859,15 @@ function selStart(e){
   if(!drawn) return;
   if(e.target && e.target.closest && e.target.closest('#zoomBadge')) return;
 
+  // Deux doigts en mode zoom → pan
+  if(e.touches && e.touches.length === 2 && viewEnd < dur){
+    panning=true;
+    const rect=viz.getBoundingClientRect();
+    panStartX=(e.touches[0].clientX+e.touches[1].clientX)/2 - rect.left;
+    panStartViewStart=viewStart; panStartViewEnd=viewEnd;
+    e.preventDefault(); return;
+  }
+
   // Si le touch est sur le curseur (#ph), démarrer un drag de position
   if(e.target && e.target.closest && e.target.closest('#ph')){
     draggingPH=true;
@@ -872,6 +882,21 @@ function selStart(e){
   e.preventDefault();
 }
 function selMove(e){
+  if(panning && e.touches && e.touches.length === 2){
+    const rect=viz.getBoundingClientRect();
+    const cx=(e.touches[0].clientX+e.touches[1].clientX)/2 - rect.left;
+    const dx=(panStartX - cx)/rect.width;  // déplacement relatif (0..1)
+    const winLen=panStartViewEnd-panStartViewStart;
+    let ns=panStartViewStart + dx*winLen;
+    let ne=panStartViewEnd   + dx*winLen;
+    // limiter aux bornes du fichier
+    if(ns<0){ne-=ns; ns=0;}
+    if(ne>dur){ns-=(ne-dur); ne=dur;}
+    viewStart=Math.max(0,ns); viewEnd=Math.min(dur,ne);
+    setZoomBadge(true);
+    drawPlayhead(offset);
+    e.preventDefault(); return;
+  }
   if(draggingPH){
     const r=evX(e);
     offset=xToTime(r);
@@ -887,6 +912,18 @@ function selMove(e){
   selX1=evX(e); updateSelUI(); e.preventDefault();
 }
 function selEnd(e){
+  if(panning){
+    panning=false;
+    // Relancer l'analyse sur la nouvelle fenêtre
+    const w=playing; if(w) pause();
+    ph.style.display='none';
+    clearStretchCache();
+    analyze(busy).then(()=>{
+      ph.style.display='block'; drawPlayhead(offset);
+      if(w) play();
+    });
+    e.preventDefault(); return;
+  }
   if(draggingPH){
     draggingPH=false;
     if(draggingPHWasPlaying) play();

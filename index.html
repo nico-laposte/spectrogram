@@ -220,7 +220,11 @@ async function load(source){
   dur = abuf.duration;
   viewStart = 0; viewEnd = dur; offset = 0;
   clearStretchCache();
-  setZoomBadge(false);   // réinitialiser le zoom au chargement d'un nouveau fichier
+  setZoomBadge(false);
+
+  // Détection automatique du mode selon le spectre énergétique
+  autoDetectMode();
+
   ilbl.textContent = name;
   iz.classList.add('has');
   em.style.display='none';
@@ -515,6 +519,59 @@ let playBuf = null;           // buffer actuellement joué (abuf ou version éti
 let stretchMode = 'oiseau';   // 'oiseau' = OLA, 'voix' = phase vocoder
 
 function clearStretchCache(){ stretchCache = {}; }
+
+// Détecte automatiquement le mode (oiseau/voix) selon le spectre du fichier.
+// Compare l'énergie dans les hautes fréquences (>2kHz) vs basses (<2kHz).
+// Un chant d'oiseau a typiquement plus d'énergie en haut.
+function autoDetectMode(){
+  if(!abuf) return;
+  const data = monoMix(abuf);
+  const sr = abuf.sampleRate;
+  const N = 4096;
+  const win = hann(N);
+  const bins = N/2;
+  const cutBin = Math.floor(2000 / (sr/2) * bins);
+
+  // Analyser 8 extraits répartis sur le fichier, garder le ratio max
+  // (le moment le plus riche spectralement est le plus représentatif)
+  let maxRatio = 0;
+  const nSamples = 8;
+  for(let s=0; s<nSamples; s++){
+    const pos = Math.floor((s + 0.5) / nSamples * (data.length - N));
+    const re = new Float32Array(N), im = new Float32Array(N);
+    for(let i=0;i<N;i++) re[i] = (data[pos+i]||0) * win[i];
+    fftInPlace(re, im);
+
+    let eLow=0, eHigh=0;
+    for(let b=1;b<bins;b++){
+      const mag = re[b]*re[b] + im[b]*im[b];
+      if(b < cutBin) eLow  += mag;
+      else           eHigh += mag;
+    }
+    const total = eLow + eHigh + 1e-10;
+    // Ignorer les extraits trop silencieux (énergie totale trop faible)
+    if(total < 1e-6) continue;
+    const ratio = eHigh / total;
+    if(ratio > maxRatio) maxRatio = ratio;
+  }
+
+  // Seuil : ratio max > 0.25 → probablement un oiseau
+  const detectedMode = maxRatio > 0.25 ? 'oiseau' : 'voix';
+  if(detectedMode === stretchMode) return;
+
+  stretchMode = detectedMode;
+  if(detectedMode === 'oiseau'){
+    MFREQ=12000; pmin.value=1000; pmax.value=8000;
+    showNotes=true; ntg.classList.add('on');
+    document.getElementById('modeOiseau').classList.add('on');
+    document.getElementById('modeVoix').classList.remove('on');
+  } else {
+    MFREQ=8000; pmin.value=80; pmax.value=1100;
+    showNotes=false; ntg.classList.remove('on');
+    document.getElementById('modeVoix').classList.add('on');
+    document.getElementById('modeOiseau').classList.remove('on');
+  }
+}
 
 // Overlap-add time stretch. factor>1 allonge (ralentit) sans changer la hauteur.
 // Sur un signal mono. Fenêtre de Hann, recouvrement 50%.

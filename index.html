@@ -802,9 +802,13 @@ loopBtn.addEventListener('click',()=>{
 });
 function exitZoom(){
   if(!abuf) return;
-  const currentPos = playing
-    ? Math.min(viewEnd, Math.max(viewStart, offset + (actx ? (actx.currentTime - t0) * speed : 0)))
-    : offset;
+  const winLen = viewEnd - viewStart;
+  let currentPos;
+  if(playing){
+    let pos = offset + (actx ? (actx.currentTime - t0) * speed : 0);
+    if(looping && winLen > 0){ while(pos >= viewEnd) pos -= winLen; }
+    currentPos = Math.min(viewEnd, Math.max(viewStart, pos));
+  } else { currentPos = offset; }
   const w=playing; if(w) pause();
   viewStart=0; viewEnd=dur;
   offset = currentPos;

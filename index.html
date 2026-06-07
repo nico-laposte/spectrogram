@@ -64,9 +64,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 .dot{width:8px;height:8px;border-radius:50%;background:rgb(255,80,80);flex-shrink:0}
 #sel{position:absolute;top:0;bottom:0;background:rgba(126,207,110,.15);border-left:1.5px solid var(--acc);border-right:1.5px solid var(--acc);display:none;pointer-events:none}
 #selrd{position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--acc);background:rgba(10,15,10,.8);padding:3px 8px;border-radius:6px;display:none;pointer-events:none;white-space:nowrap}
-.rbtn{height:32px;padding:0 12px;background:var(--surf);border:1px solid var(--bdr);border-radius:8px;color:var(--mut);font-family:'DM Mono',monospace;font-size:11px}
-.rbtn.on{background:rgba(126,207,110,.1);border-color:var(--acc);color:var(--acc)}
-.rbtn:disabled{opacity:.35}
+.trsp-btn{width:30px;height:30px;border-radius:50%;background:var(--surf);border:1px solid var(--bdr);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--mut)}
+.trsp-btn.on{border-color:var(--acc);color:var(--acc);background:rgba(126,207,110,.08)}
 #zoomBadge{position:absolute;top:6px;right:6px;display:none;align-items:center;gap:8px;background:rgba(240,200,74,.14);border:1px solid var(--acc2);border-radius:8px;padding:4px 6px 4px 10px;z-index:20}
 #zoomBadge.on{display:flex}
 #zoomTxt{font-size:10px;color:var(--acc2);white-space:nowrap}
@@ -113,6 +112,14 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
       <button id="pb" disabled><svg id="pi" width="16" height="16" viewBox="0 0 16 16"><polygon points="4,2 14,8 4,14"/></svg></button>
       <div class="pw"><div class="pt"><div id="pf"></div></div><input type="range" id="pr" min="0" max="1000" value="0"></div>
       <div id="td">0:00 / 0:00</div>
+      <button id="loopBtn" class="trsp-btn on" title="Boucle">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="10,1 13,4 10,7"/>
+          <path d="M1,4 Q1,1 4,1 L13,1"/>
+          <polyline points="4,13 1,10 4,7"/>
+          <path d="M13,10 Q13,13 10,13 L1,13"/>
+        </svg>
+      </button>
     </div>
     <div class="row">
       <div class="rl">Vitesse</div>
@@ -136,10 +143,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
       <div class="rl" style="min-width:0;margin-left:14px">Notes</div>
       <button class="pl on" id="ntg"></button>
     </div>
-    <div class="row">
-      <div class="rl">Région</div>
-      <button id="loopBtn" class="rbtn on">🔁 Boucle</button>
-    </div>
+
   </div>
 </div>
 
@@ -627,7 +631,13 @@ function stopAll(){
   iosAudio.pause(); iosAudio.loop = false;
   stopSrc();
   playing=false; offset=viewStart; setIcon(false);
-  ph.style.display='none'; cancelAnimationFrame(raf); drawPlayhead(viewStart);
+  cancelAnimationFrame(raf);
+  if(drawn){
+    ph.style.display='block';
+    drawPlayhead(viewStart);
+    pf.style.width='0%'; pr.value=0;
+    td.textContent=fmt(viewStart)+' / '+fmt(viewEnd);
+  }
 }
 function stopSrc(){ if(src){src.onended=null;try{src.stop();}catch(e){}src.disconnect();src=null;} }
 function loop(){

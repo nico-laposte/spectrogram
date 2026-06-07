@@ -615,7 +615,7 @@ function pause(){
   if(!playing) return;
   clearTimeout(stopTimer);
   // iosAudio.currentTime est en secondes dans le buffer étiré → multiplier par speed pour revenir en temps réel
-  offset = viewStart + iosAudio.currentTime * speed;
+  offset = iosAudio.currentTime * speed;
   if(offset > viewEnd) offset = viewEnd;
   if(offset < viewStart) offset = viewStart;
   iosAudio.pause();
@@ -715,7 +715,7 @@ function selEnd(e){
   const t0s=xToTime(a), t1s=xToTime(b);
   // Capturer la position courante AVANT la pause (pause() modifie offset)
   const currentPos = playing
-    ? Math.min(viewEnd, Math.max(viewStart, viewStart + iosAudio.currentTime * speed))
+    ? Math.min(viewEnd, Math.max(viewStart, iosAudio.currentTime * speed))
     : offset;
   const w=playing; if(w) pause();
   viewStart=t0s; viewEnd=t1s;
@@ -772,12 +772,8 @@ loopBtn.addEventListener('click',()=>{
 });
 function exitZoom(){
   if(!abuf) return;
-  // DIAGNOSTIC : afficher les valeurs réelles
-  const iosCT = iosAudio.currentTime;
-  const iosDur = iosAudio.duration;
-  td.textContent = 'ct:'+iosCT.toFixed(2)+' dur:'+iosDur.toFixed(2)+' vs:'+viewStart.toFixed(2)+' spd:'+speed;
   const currentPos = playing
-    ? Math.min(viewEnd, Math.max(viewStart, viewStart + iosCT * speed))
+    ? Math.min(viewEnd, Math.max(viewStart, iosAudio.currentTime * speed))
     : offset;
   const w=playing; if(w) pause();
   viewStart=0; viewEnd=dur;
@@ -788,6 +784,7 @@ function exitZoom(){
     const winLen = viewEnd - viewStart;
     const r = winLen>0 ? (offset - viewStart)/winLen : 0;
     pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
     drawPlayhead(offset);
     if(w) play();
   });

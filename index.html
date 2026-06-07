@@ -151,7 +151,7 @@ let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
 let curve=[], spec=null;
 // Fenêtre visible (zoom) en secondes + mode boucle + sélection en cours
 let viewStart=0, viewEnd=0, looping=true;
-let selX0=null, selX1=null, selecting=false, draggingPH=false;
+let selX0=null, selX1=null, selecting=false, draggingPH=false, draggingPHWasPlaying=false;
 let stopTimer=null;
 
 const $ = id => document.getElementById(id);
@@ -703,7 +703,8 @@ function selStart(e){
   // Si le touch est sur le curseur (#ph), démarrer un drag de position
   if(e.target && e.target.closest && e.target.closest('#ph')){
     draggingPH=true;
-    const w=playing; if(w) pause();
+    draggingPHWasPlaying=playing;
+    if(playing) pause();
     e.preventDefault(); return;
   }
 
@@ -730,7 +731,7 @@ function selMove(e){
 function selEnd(e){
   if(draggingPH){
     draggingPH=false;
-    play();   // reprendre depuis le nouvel offset
+    if(draggingPHWasPlaying) play();
     e.preventDefault(); return;
   }
   if(!selecting) return;

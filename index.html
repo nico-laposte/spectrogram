@@ -54,8 +54,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 .pw input{position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0}
 #td{font-size:10px;color:var(--mut);white-space:nowrap;min-width:60px;text-align:right}
 .sbs{display:flex;gap:5px;flex:1}
-.sb{flex:1;height:30px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px;color:var(--mut);font-family:'DM Mono',monospace;font-size:11px}
-.sb.on{background:rgba(126,207,110,.1);border-color:var(--acc);color:var(--acc)}
+.sb,.mdb{flex:1;height:30px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px;color:var(--mut);font-family:'DM Mono',monospace;font-size:11px}
+.sb.on,.mdb.on{background:rgba(126,207,110,.1);border-color:var(--acc);color:var(--acc)}
 .fic{display:flex;align-items:center;gap:6px;flex:1}
 .fic label{font-size:9px;color:var(--mut)}
 .fic input{width:62px;height:28px;background:var(--surf);border:1px solid var(--bdr);border-radius:6px;color:var(--txt);font-family:'DM Mono',monospace;font-size:11px;text-align:center;-webkit-appearance:none}
@@ -143,12 +143,20 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
       <div class="rl" style="min-width:0;margin-left:14px">Notes</div>
       <button class="pl on" id="ntg"></button>
     </div>
+    <div class="row">
+      <div class="rl">Mode</div>
+      <div class="sbs" id="modeSbs">
+        <button class="mdb on" id="modeOiseau">🐦 Oiseau</button>
+        <button class="mdb" id="modeVoix">🎤 Voix</button>
+      </div>
+    </div>
 
   </div>
 </div>
 
 <script>
-const MFREQ = 12000, FFTN = 2048, NCOLS = 600;
+const FFTN = 2048, NCOLS = 600;
+let MFREQ = 12000;  // fréquence max du spectrogramme — change selon le mode
 
 let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
 let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
@@ -340,14 +348,32 @@ function fftMag(data,start,N,win,maxBin){
 function hann(N){const w=new Float32Array(N);for(let i=0;i<N;i++)w[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));return w;}
 
 // ── DRAW ──────────────────────────────────────────────────────────────────
+// Conversion Hz ↔ position Y selon l'échelle (linéaire ou log)
+const FMIN_LOG = 80;   // borne basse de l'échelle log (Hz)
+function hzToY(hz, H){ 
+  if(stretchMode !== 'voix') return (1 - hz/MFREQ) * H;
+  const lo=Math.log2(FMIN_LOG), hi=Math.log2(MFREQ);
+  return (1 - (Math.log2(Math.max(hz,FMIN_LOG)) - lo) / (hi - lo)) * H;
+}
+function yToHz(y, H){
+  if(stretchMode !== 'voix') return (1 - y/H) * MFREQ;
+  const lo=Math.log2(FMIN_LOG), hi=Math.log2(MFREQ);
+  return Math.pow(2, lo + (1 - y/H) * (hi - lo));
+}
+
 function drawSpec(W,H){
   const {out,cols,maxBin,gMax}=spec;
   const ctx=sc.getContext('2d'), img=ctx.createImageData(W,H), px=img.data;
   for(let x=0;x<W;x++){
     const ci=Math.min(Math.floor(x/W*cols),cols-1), off=ci*maxBin;
     for(let y=0;y<H;y++){
-      const bin=Math.min(Math.floor((H-1-y)/(H-1)*maxBin),maxBin-1);
-      const [r,g,b]=color(out[off+bin]/(gMax||1));
+      const hz = yToHz(y, H);
+      const binF = hz/MFREQ*maxBin;          // bin flottant
+      const b0 = Math.floor(binF);
+      const b1 = Math.min(b0+1, maxBin-1);
+      const t  = binF - b0;                  // fraction pour interpolation
+      const val = (out[off+b0]||0)*(1-t) + (out[off+b1]||0)*t;
+      const [r,g,b]=color(val/(gMax||1));
       const i=(y*W+x)*4; px[i]=r;px[i+1]=g;px[i+2]=b;px[i+3]=255;
     }
   }
@@ -380,7 +406,7 @@ function drawCurve(H){
   const ctx=pc.getContext('2d'), W=pc.width; H=H||pc.height;
   ctx.clearRect(0,0,W,H);
   if(!curve.length) return;
-  const yOf=hz=>(1-hz/MFREQ)*H;
+  const yOf=hz=>hzToY(hz,H);
 
   if(showP){
     const p1=parseInt(pmin.value)||1000, p2=parseInt(pmax.value)||8000;
@@ -450,10 +476,15 @@ function labelHeldNotes(ctx,W,H,yOf){
 
 function freqLabels(){
   flbl.innerHTML='';
-  [10000,8000,6000,4000,2000,1000,500].forEach(hz=>{
-    if(hz>MFREQ)return;
+  const H = sc.height || 300;
+  const marks = stretchMode==='voix'
+    ? [6000,4000,2000,1000,500,250,125]
+    : [10000,8000,6000,4000,2000,1000,500];
+  marks.forEach(hz=>{
+    if(hz>MFREQ||hz<FMIN_LOG) return;
     const s=document.createElement('span');
-    s.textContent=hz>=1000?hz/1000+'k':hz; s.style.top=((1-hz/MFREQ)*100)+'%';
+    s.textContent=hz>=1000?hz/1000+'k':hz;
+    s.style.top=(hzToY(hz,H)/H*100)+'%';
     flbl.appendChild(s);
   });
 }
@@ -474,21 +505,21 @@ function color(t){
 // Cache des buffers ralentis par vitesse. ×1 = abuf direct (pas de traitement).
 let stretchCache = {};        // { "0.5": AudioBuffer, ... }
 let playBuf = null;           // buffer actuellement joué (abuf ou version étirée)
+let stretchMode = 'oiseau';   // 'oiseau' = OLA, 'voix' = phase vocoder
 
 function clearStretchCache(){ stretchCache = {}; }
 
 // Overlap-add time stretch. factor>1 allonge (ralentit) sans changer la hauteur.
 // Sur un signal mono. Fenêtre de Hann, recouvrement 50%.
-function timeStretch(input, sr, factor){
+function timeStretchOLA(input, sr, factor){
   const N = input.length;
-  const frame = 1024;               // taille d'analyse
-  const synHop = frame >> 1;        // saut de synthèse (50% overlap)
-  const anaHop = synHop / factor;   // saut d'analyse (plus petit si on ralentit)
+  const frame = 1024;
+  const synHop = frame >> 1;
+  const anaHop = synHop / factor;
   const outLen = Math.ceil(N * factor) + frame;
   const out = new Float32Array(outLen);
   const winSum = new Float32Array(outLen);
   const w = hann(frame);
-
   let ana = 0, syn = 0;
   while(ana + frame < N){
     const a0 = Math.floor(ana);
@@ -500,23 +531,128 @@ function timeStretch(input, sr, factor){
     ana += anaHop;
     syn += synHop;
   }
-  // normaliser par la somme des fenêtres
   for(let i=0;i<outLen;i++){ if(winSum[i]>1e-6) out[i] /= winSum[i]; }
-
   const buf = actx.createBuffer(1, outLen, sr);
   buf.getChannelData(0).set(out);
   return buf;
 }
 
+// Phase vocoder time stretch — meilleur sur la voix humaine.
+// Préserve la cohérence de phase entre trames successives.
+function timeStretchPV(input, sr, factor){
+  const N = input.length;
+  const fftSize = 2048;
+  const hop = fftSize >> 2;   // 75% overlap
+  const synHop = Math.round(hop * factor);
+  const outLen = Math.ceil(N * factor) + fftSize;
+  const out = new Float32Array(outLen);
+  const winSum = new Float32Array(outLen);
+  const w = hann(fftSize);
+
+  // Phases accumulées
+  const phaseAcc = new Float32Array(fftSize);
+  const lastPhase = new Float32Array(fftSize);
+  const TWO_PI = 2 * Math.PI;
+
+  let anaPos = 0, synPos = 0;
+  while(anaPos + fftSize < N){
+    // Extraire trame et appliquer fenêtre
+    const re = new Float32Array(fftSize);
+    const im = new Float32Array(fftSize);
+    for(let i=0;i<fftSize;i++) re[i] = (input[Math.floor(anaPos)+i]||0) * w[i];
+
+    // FFT
+    fftInPlace(re, im);
+
+    // Traitement phase vocoder
+    for(let k=0;k<fftSize/2;k++){
+      const mag = Math.sqrt(re[k]*re[k] + im[k]*im[k]);
+      const phase = Math.atan2(im[k], re[k]);
+      // Différence de phase attendue
+      let dPhase = phase - lastPhase[k] - (TWO_PI * k * hop / fftSize);
+      // Rabattre dans [-π, π]
+      dPhase -= TWO_PI * Math.round(dPhase / TWO_PI);
+      // Fréquence vraie
+      const trueFreq = TWO_PI * k / fftSize + dPhase / hop;
+      phaseAcc[k] += synHop * trueFreq;
+      lastPhase[k] = phase;
+      re[k] = mag * Math.cos(phaseAcc[k]);
+      im[k] = mag * Math.sin(phaseAcc[k]);
+      // Symétrie hermitienne
+      if(k > 0 && k < fftSize/2){
+        re[fftSize-k] = re[k];
+        im[fftSize-k] = -im[k];
+      }
+    }
+
+    // IFFT
+    ifftInPlace(re, im);
+
+    // Overlap-add
+    for(let i=0;i<fftSize;i++){
+      out[synPos+i]    += re[i] * w[i];
+      winSum[synPos+i] += w[i] * w[i];
+    }
+    anaPos += hop;
+    synPos += synHop;
+  }
+
+  for(let i=0;i<outLen;i++){ if(winSum[i]>1e-6) out[i] /= winSum[i]; }
+  const buf = actx.createBuffer(1, outLen, sr);
+  buf.getChannelData(0).set(out);
+  return buf;
+}
+
+// FFT en place (Cooley-Tukey radix-2)
+function fftInPlace(re, im){
+  const N = re.length;
+  for(let i=1,j=0;i<N;i++){
+    let bit=N>>1;
+    for(;j&bit;bit>>=1) j^=bit;
+    j^=bit;
+    if(i<j){ let t=re[i]; re[i]=re[j]; re[j]=t; t=im[i]; im[i]=im[j]; im[j]=t; }
+  }
+  for(let len=2;len<=N;len<<=1){
+    const ang=-2*Math.PI/len;
+    const wRe=Math.cos(ang), wIm=Math.sin(ang);
+    for(let i=0;i<N;i+=len){
+      let curRe=1, curIm=0;
+      for(let j=0;j<len/2;j++){
+        const uRe=re[i+j], uIm=im[i+j];
+        const vRe=re[i+j+len/2]*curRe-im[i+j+len/2]*curIm;
+        const vIm=re[i+j+len/2]*curIm+im[i+j+len/2]*curRe;
+        re[i+j]=uRe+vRe; im[i+j]=uIm+vIm;
+        re[i+j+len/2]=uRe-vRe; im[i+j+len/2]=uIm-vIm;
+        const newRe=curRe*wRe-curIm*wIm;
+        curIm=curRe*wIm+curIm*wRe; curRe=newRe;
+      }
+    }
+  }
+}
+
+function ifftInPlace(re, im){
+  for(let i=0;i<im.length;i++) im[i]=-im[i];
+  fftInPlace(re, im);
+  const N=re.length;
+  for(let i=0;i<N;i++){ re[i]/=N; im[i]=-im[i]/N; }
+}
+
+function timeStretch(input, sr, factor){
+  return stretchMode==='voix'
+    ? timeStretchPV(input, sr, factor)
+    : timeStretchOLA(input, sr, factor);
+}
+
 // Récupère (ou calcule) le buffer à jouer pour la vitesse demandée
 async function getPlayBuffer(spd){
-  if(spd === 1) return abuf;             // direct, instantané
+  if(!spd || isNaN(spd) || spd <= 0) spd = 1;
+  if(Math.abs(spd - 1) < 0.001) return abuf;   // ×1 direct, même avec arrondi flottant
   const key = String(spd);
   if(stretchCache[key]) return stretchCache[key];
   setOv(true, 'Préparation ×'+spd+'…', 50);
   await tick(20);
   const mono = monoMix(abuf);
-  const stretched = timeStretch(mono, abuf.sampleRate, 1/spd); // 1/spd = facteur d'allongement
+  const stretched = timeStretch(mono, abuf.sampleRate, 1/spd);
   stretchCache[key] = stretched;
   setOv(false);
   return stretched;
@@ -690,6 +826,24 @@ document.querySelectorAll('.sb').forEach(b=>b.addEventListener('click',async()=>
 }));
 ptg.addEventListener('click',()=>{ showP=!showP; ptg.classList.toggle('on',showP); if(drawn)drawCurve(pc.height); });
 ntg.addEventListener('click',()=>{ showNotes=!showNotes; ntg.classList.toggle('on',showNotes); if(drawn)drawCurve(pc.height); });
+document.getElementById('modeOiseau').addEventListener('click',async()=>{
+  if(stretchMode==='oiseau') return;
+  stretchMode='oiseau'; MFREQ=12000;
+  pmin.value=1000; pmax.value=8000;
+  document.getElementById('modeOiseau').classList.add('on');
+  document.getElementById('modeVoix').classList.remove('on');
+  clearStretchCache();
+  if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
+});
+document.getElementById('modeVoix').addEventListener('click',async()=>{
+  if(stretchMode==='voix') return;
+  stretchMode='voix'; MFREQ=8000;
+  pmin.value=80; pmax.value=1100;
+  document.getElementById('modeVoix').classList.add('on');
+  document.getElementById('modeOiseau').classList.remove('on');
+  clearStretchCache();
+  if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
+});
 // Recalcul automatique quand les champs pitch min/max changent
 [pmin,pmax].forEach(el=>el.addEventListener('change',async()=>{
   if(!abuf||!drawn) return;

@@ -148,6 +148,7 @@ const MFREQ = 12000, FFTN = 2048, NCOLS = 600;
 
 let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
 let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
+let currentPlayPos=0;  // position réelle mise à jour à chaque frame par loop()
 let curve=[], spec=null;
 // Fenêtre visible (zoom) en secondes + mode boucle + sélection en cours
 let viewStart=0, viewEnd=0, looping=true;
@@ -613,8 +614,7 @@ async function play(){
 function pause(){
   if(!playing) return;
   clearTimeout(stopTimer);
-  // Web Audio est la source de vérité pour la position
-  offset += (actx.currentTime - t0) * speed;
+  offset = currentPlayPos;  // position exacte telle que vue par loop()
   if(offset > viewEnd) offset = viewEnd;
   if(offset < viewStart) offset = viewStart;
   iosAudio.pause();
@@ -640,6 +640,7 @@ function loop(){
   } else if(pos > viewEnd){
     pos = viewEnd;
   }
+  currentPlayPos = pos;  // source de vérité pour pause()
   drawPlayhead(pos);
   const r = winLen>0 ? (pos - viewStart)/winLen : 0;
   pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
@@ -743,7 +744,7 @@ function selEnd(e){
   const t0s=xToTime(a), t1s=xToTime(b);
   // Capturer la position courante AVANT la pause (pause() modifie offset)
   const currentPos = playing
-    ? Math.min(viewEnd, Math.max(viewStart, offset + (actx ? (actx.currentTime - t0) * speed : 0)))
+    ? Math.min(viewEnd, Math.max(viewStart, currentPlayPos))
     : offset;
   const w=playing; if(w) pause();
   viewStart=t0s; viewEnd=t1s;
@@ -805,9 +806,8 @@ function exitZoom(){
   const winLen = viewEnd - viewStart;
   let currentPos;
   if(playing){
-    let pos = offset + (actx ? (actx.currentTime - t0) * speed : 0);
-    if(looping && winLen > 0){ while(pos >= viewEnd) pos -= winLen; }
-    currentPos = Math.min(viewEnd, Math.max(viewStart, pos));
+    // currentPlayPos est maintenu à jour par loop() — position exacte même en boucle
+    currentPos = Math.min(viewEnd, Math.max(viewStart, currentPlayPos));
   } else { currentPos = offset; }
   const w=playing; if(w) pause();
   viewStart=0; viewEnd=dur;

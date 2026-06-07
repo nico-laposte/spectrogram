@@ -28,7 +28,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 #pc{pointer-events:none}
 .em{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--mut);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
 .em svg{opacity:.3}
-#ph{position:absolute;top:0;bottom:0;width:1.5px;background:rgba(255,255,255,.7);display:none;box-shadow:0 0 6px rgba(255,255,255,.4);pointer-events:none}
+#ph{position:absolute;top:0;bottom:0;width:40px;transform:translateX(-50%);display:none;cursor:ew-resize;touch-action:none;z-index:10}
+#ph::after{content:'';position:absolute;top:0;bottom:0;left:50%;width:1.5px;transform:translateX(-50%);background:rgba(255,255,255,.7);box-shadow:0 0 6px rgba(255,255,255,.4)}
 .fl{position:absolute;left:4px;top:0;bottom:0;pointer-events:none}
 .fl span{position:absolute;font-size:8px;color:rgba(200,216,192,.45);transform:translateY(-50%)}
 .tl{position:absolute;bottom:4px;left:28px;right:8px;display:flex;justify-content:space-between;pointer-events:none}
@@ -153,7 +154,7 @@ let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
 let curve=[], spec=null;
 // Fenêtre visible (zoom) en secondes + mode boucle + sélection en cours
 let viewStart=0, viewEnd=0, looping=true;
-let selX0=null, selX1=null, selecting=false;
+let selX0=null, selX1=null, selecting=false, draggingPH=false;
 let stopTimer=null;
 
 const $ = id => document.getElementById(id);
@@ -689,18 +690,40 @@ function xToTime(r){ return viewStart + r*(viewEnd-viewStart); }
 
 function selStart(e){
   if(!drawn) return;
-  // Ne pas démarrer une sélection si le geste vient du badge de zoom (croix, etc.)
   if(e.target && e.target.closest && e.target.closest('#zoomBadge')) return;
+
+  // Si le touch est sur le curseur (#ph), démarrer un drag de position
+  if(e.target && e.target.closest && e.target.closest('#ph')){
+    draggingPH=true;
+    const w=playing; if(w) pause();
+    e.preventDefault(); return;
+  }
+
   selecting=true; selX0=evX(e); selX1=selX0;
   sel.style.display='block'; selrd.style.display='block';
   updateSelUI();
   e.preventDefault();
 }
 function selMove(e){
+  if(draggingPH){
+    const r=evX(e);
+    offset=xToTime(r);
+    offset=Math.max(viewStart, Math.min(viewEnd, offset));
+    const winLen=viewEnd-viewStart;
+    const rr=winLen>0?(offset-viewStart)/winLen:0;
+    pf.style.width=(rr*100)+'%'; pr.value=Math.round(rr*1000);
+    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    drawPlayhead(offset);
+    e.preventDefault(); return;
+  }
   if(!selecting) return;
   selX1=evX(e); updateSelUI(); e.preventDefault();
 }
 function selEnd(e){
+  if(draggingPH){
+    draggingPH=false;
+    e.preventDefault(); return;
+  }
   if(!selecting) return;
   selecting=false;
   const a=Math.min(selX0,selX1), b=Math.max(selX0,selX1);

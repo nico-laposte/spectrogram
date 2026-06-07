@@ -541,7 +541,8 @@ function timeStretchOLA(input, sr, factor){
 // Préserve la cohérence de phase entre trames successives.
 function timeStretchPV(input, sr, factor){
   const N = input.length;
-  const fftSize = 2048;
+  // Adapter la taille FFT selon le facteur d'étirement — plus grand = moins de craquements
+  const fftSize = factor >= 3 ? 8192 : factor >= 2 ? 4096 : 2048;
   const hop = fftSize >> 2;   // 75% overlap
   const synHop = Math.round(hop * factor);
   const outLen = Math.ceil(N * factor) + fftSize;
@@ -549,46 +550,36 @@ function timeStretchPV(input, sr, factor){
   const winSum = new Float32Array(outLen);
   const w = hann(fftSize);
 
-  // Phases accumulées
   const phaseAcc = new Float32Array(fftSize);
   const lastPhase = new Float32Array(fftSize);
   const TWO_PI = 2 * Math.PI;
 
   let anaPos = 0, synPos = 0;
   while(anaPos + fftSize < N){
-    // Extraire trame et appliquer fenêtre
     const re = new Float32Array(fftSize);
     const im = new Float32Array(fftSize);
     for(let i=0;i<fftSize;i++) re[i] = (input[Math.floor(anaPos)+i]||0) * w[i];
 
-    // FFT
     fftInPlace(re, im);
 
-    // Traitement phase vocoder
     for(let k=0;k<fftSize/2;k++){
       const mag = Math.sqrt(re[k]*re[k] + im[k]*im[k]);
       const phase = Math.atan2(im[k], re[k]);
-      // Différence de phase attendue
       let dPhase = phase - lastPhase[k] - (TWO_PI * k * hop / fftSize);
-      // Rabattre dans [-π, π]
       dPhase -= TWO_PI * Math.round(dPhase / TWO_PI);
-      // Fréquence vraie
       const trueFreq = TWO_PI * k / fftSize + dPhase / hop;
       phaseAcc[k] += synHop * trueFreq;
       lastPhase[k] = phase;
       re[k] = mag * Math.cos(phaseAcc[k]);
       im[k] = mag * Math.sin(phaseAcc[k]);
-      // Symétrie hermitienne
       if(k > 0 && k < fftSize/2){
         re[fftSize-k] = re[k];
         im[fftSize-k] = -im[k];
       }
     }
 
-    // IFFT
     ifftInPlace(re, im);
 
-    // Overlap-add
     for(let i=0;i<fftSize;i++){
       out[synPos+i]    += re[i] * w[i];
       winSum[synPos+i] += w[i] * w[i];
@@ -832,6 +823,7 @@ document.getElementById('modeOiseau').addEventListener('click',async()=>{
   pmin.value=1000; pmax.value=8000;
   document.getElementById('modeOiseau').classList.add('on');
   document.getElementById('modeVoix').classList.remove('on');
+  showNotes=true; ntg.classList.add('on');
   clearStretchCache();
   if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
 });
@@ -841,6 +833,7 @@ document.getElementById('modeVoix').addEventListener('click',async()=>{
   pmin.value=80; pmax.value=1100;
   document.getElementById('modeVoix').classList.add('on');
   document.getElementById('modeOiseau').classList.remove('on');
+  showNotes=false; ntg.classList.remove('on');
   clearStretchCache();
   if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
 });

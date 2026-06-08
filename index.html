@@ -945,9 +945,8 @@ function ifftInPlace(re, im){
 }
 
 function timeStretch(input, sr, factor){
-  return stretchMode==='voix'
-    ? timeStretchPV(input, sr, factor)
-    : timeStretchOLA(input, sr, factor);
+  // Le phase vocoder préserve mieux la hauteur sur tous les types de sons
+  return timeStretchPV(input, sr, factor);
 }
 
 // Récupère (ou calcule) le buffer à jouer pour la vitesse demandée

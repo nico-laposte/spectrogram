@@ -165,7 +165,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 
 <script>
 const FFTN = 2048, NCOLS = 600;
-let MFREQ = 12000;  // fréquence max du spectrogramme — change selon le mode
+let MFREQ = 8000;  // fréquence max du spectrogramme — change selon le mode
 
 let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
 let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
@@ -195,7 +195,7 @@ async function load(source){
   // source = File (import manuel) ou ArrayBuffer (depuis hash URL)
   const job = ++busy;
   tip.style.display='none';
-  setOv(true,'Décodage…',10);
+  setOv(true,'Décodage…',5);
   stopAll();
 
   if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
@@ -212,7 +212,7 @@ async function load(source){
   }
   if(job!==busy) return;
 
-  setOv(true,'Décodage audio…',20);
+  setOv(true,'Décodage audio…',15);
   try {
     abuf = await actx.decodeAudioData(bytes.slice(0));
   } catch(e){
@@ -283,7 +283,7 @@ function fail(file){
 // ── ANALYSE ───────────────────────────────────────────────────────────────
 async function analyze(job){
   drawn=false;
-  setOv(true,'Analyse…',25);
+  setOv(true,'Analyse…',30);
   await tick(30);
 
   const W = sc.parentElement.clientWidth||320;
@@ -315,7 +315,7 @@ async function analyze(job){
       const off=c*maxBin;
       for(let b=0;b<maxBin;b++){ out[off+b]=m[b]; if(m[b]>gMax)gMax=m[b]; }
     }
-    setOv(true,'Analyse… '+Math.round(ci/cols*100)+'%',25+Math.round(ci/cols*55));
+    setOv(true,'Analyse…', 30+Math.round(ci/cols*65));
     await tick(1);
   }
   if(job!==busy) return setOv(false);
@@ -329,11 +329,12 @@ async function analyze(job){
     timeLabels();
   }catch(err){ console.error('draw error:', err); }
   drawn=true;
-  // Afficher le curseur dès la fin de l'analyse pour permettre le drag immédiat
   if(!playing){
     ph.style.display='block';
     drawPlayhead(offset);
   }
+  setOv(true,'',100);
+  await tick(150);
   setOv(false);
 }
 
@@ -810,7 +811,7 @@ function autoDetectMode(){
 
   stretchMode = detectedMode;
   if(detectedMode === 'oiseau'){
-    MFREQ=12000; pmin.value=1000; pmax.value=8000;
+    MFREQ=8000; pmin.value=1000; pmax.value=8000;
     showNotes=true; ntg.classList.add('on');
     document.getElementById('modeOiseau').classList.add('on');
     document.getElementById('modeVoix').classList.remove('on');
@@ -1153,7 +1154,7 @@ ntg.addEventListener('click',()=>{
 });
 document.getElementById('modeOiseau').addEventListener('click',async()=>{
   if(stretchMode==='oiseau') return;
-  stretchMode='oiseau'; MFREQ=12000; FMIN_LOG=80;
+  stretchMode='oiseau'; MFREQ=8000; FMIN_LOG=80;
   pmin.value=1000; pmax.value=8000;
   document.getElementById('lblPitch').textContent='Pitch';
   document.getElementById('modeOiseau').classList.add('on');

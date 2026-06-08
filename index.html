@@ -239,6 +239,8 @@ async function load(source){
   computeSpecFull().catch(e=>console.warn('specFull:', e));
 
   await analyze(job);
+  // Précalculer le buffer étiré en arrière-plan si la vitesse n'est pas ×1
+  if(speed !== 1) getPlayBuffer(speed).catch(()=>{});
 }
 
 // ── CHARGEMENT AUTOMATIQUE DEPUIS L'URL (#data=base64) ───────────────────
@@ -336,6 +338,8 @@ async function analyze(job){
   setOv(true,'',100);
   await tick(150);
   setOv(false);
+  // Précalculer le buffer étiré en arrière-plan si vitesse != ×1
+  if(speed !== 1) getPlayBuffer(speed).catch(()=>{});
 }
 
 function monoMix(buf){
@@ -1134,9 +1138,11 @@ pr.addEventListener('input',e=>{
 });
 document.querySelectorAll('.sb').forEach(b=>b.addEventListener('click',async()=>{
   const w=playing;
-  if(w) pause();                       // ralentir relance depuis la position courante
+  if(w) pause();
   speed=parseFloat(b.dataset.s);
   document.querySelectorAll('.sb').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  // Précalculer immédiatement le buffer étiré (en arrière-plan si pas en lecture)
+  if(abuf && speed !== 1) getPlayBuffer(speed).catch(()=>{});
   if(w) await play();
 }));
 ptg.addEventListener('click',()=>{

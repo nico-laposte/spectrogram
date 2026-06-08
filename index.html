@@ -335,10 +335,7 @@ async function analyze(job){
     ph.style.display='block';
     drawPlayhead(offset);
   }
-  setOv(true,'',100);
-  await tick(150);
   setOv(false);
-  // Précalculer le buffer étiré en arrière-plan si vitesse != ×1
   if(speed !== 1) getPlayBuffer(speed, true).catch(()=>{});
 }
 
@@ -1140,8 +1137,12 @@ document.querySelectorAll('.sb').forEach(b=>b.addEventListener('click',async()=>
   if(w) pause();
   speed=parseFloat(b.dataset.s);
   document.querySelectorAll('.sb').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  // Précalculer immédiatement le buffer étiré (en arrière-plan si pas en lecture)
-  if(abuf && speed !== 1) getPlayBuffer(speed, true).catch(()=>{});
+  await tick(0);  // laisser le navigateur rendre le bouton sélectionné
+  if(abuf && speed !== 1){
+    // Si en lecture : calcul visible avec overlay. Sinon : silencieux en arrière-plan.
+    if(w) await getPlayBuffer(speed);
+    else getPlayBuffer(speed, true).catch(()=>{});
+  }
   if(w) await play();
 }));
 ptg.addEventListener('click',()=>{

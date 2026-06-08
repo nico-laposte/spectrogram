@@ -240,7 +240,7 @@ async function load(source){
 
   await analyze(job);
   // Précalculer le buffer étiré en arrière-plan si la vitesse n'est pas ×1
-  if(speed !== 1) getPlayBuffer(speed).catch(()=>{});
+  if(speed !== 1) getPlayBuffer(speed, true).catch(()=>{});
 }
 
 // ── CHARGEMENT AUTOMATIQUE DEPUIS L'URL (#data=base64) ───────────────────
@@ -339,7 +339,7 @@ async function analyze(job){
   await tick(150);
   setOv(false);
   // Précalculer le buffer étiré en arrière-plan si vitesse != ×1
-  if(speed !== 1) getPlayBuffer(speed).catch(()=>{});
+  if(speed !== 1) getPlayBuffer(speed, true).catch(()=>{});
 }
 
 function monoMix(buf){
@@ -954,17 +954,16 @@ function timeStretch(input, sr, factor){
 }
 
 // Récupère (ou calcule) le buffer à jouer pour la vitesse demandée
-async function getPlayBuffer(spd){
+async function getPlayBuffer(spd, silent=false){
   if(!spd || isNaN(spd) || spd <= 0) spd = 1;
-  if(Math.abs(spd - 1) < 0.001) return abuf;   // ×1 direct, même avec arrondi flottant
+  if(Math.abs(spd - 1) < 0.001) return abuf;
   const key = String(spd);
   if(stretchCache[key]) return stretchCache[key];
-  setOv(true, 'Préparation ×'+spd+'…', 50);
-  await tick(20);
+  if(!silent){ setOv(true, 'Préparation ×'+spd+'…', 50); await tick(20); }
   const mono = monoMix(abuf);
   const stretched = timeStretch(mono, abuf.sampleRate, 1/spd);
   stretchCache[key] = stretched;
-  setOv(false);
+  if(!silent) setOv(false);
   return stretched;
 }
 
@@ -1142,7 +1141,7 @@ document.querySelectorAll('.sb').forEach(b=>b.addEventListener('click',async()=>
   speed=parseFloat(b.dataset.s);
   document.querySelectorAll('.sb').forEach(x=>x.classList.remove('on')); b.classList.add('on');
   // Précalculer immédiatement le buffer étiré (en arrière-plan si pas en lecture)
-  if(abuf && speed !== 1) getPlayBuffer(speed).catch(()=>{});
+  if(abuf && speed !== 1) getPlayBuffer(speed, true).catch(()=>{});
   if(w) await play();
 }));
 ptg.addEventListener('click',()=>{

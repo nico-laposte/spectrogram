@@ -1111,13 +1111,15 @@ function timeStretchPV(input,factor){
 
 self.onmessage=function(e){
   const {mode,factor,samples}=e.data;
+  // samples est un ArrayBuffer transféré — le convertir en Float32Array
+  const input=new Float32Array(samples);
   let result;
   if(mode==='voix'){
-    result=timeStretchPV(samples,factor);
+    result=timeStretchPV(input,factor);
   } else if(mode==='musique'){
-    result=wsola(samples,factor,{frameSize:2048,overlap:0.75,searchRadius:512});
+    result=wsola(input,factor,{frameSize:2048,overlap:0.75,searchRadius:factor>=3?256:512});
   } else {
-    result=wsola(samples,factor,{frameSize:1024,overlap:0.75,searchRadius:128});
+    result=wsola(input,factor,{frameSize:1024,overlap:0.75,searchRadius:factor>=3?64:128});
   }
   postMessage({type:'done',samples:result.buffer},[result.buffer]);
 };
@@ -1199,8 +1201,8 @@ function timeStretchSync(samples, mode, factor){
   } else {
     // WSOLA
     const opts=mode==='musique'
-      ?{frameSize:2048,overlap:0.75,searchRadius:512}
-      :{frameSize:1024,overlap:0.75,searchRadius:128};
+      ?{frameSize:2048,overlap:0.75,searchRadius:factor>=3?256:512}
+      :{frameSize:1024,overlap:0.75,searchRadius:factor>=3?64:128};
     const frameSize=opts.frameSize,overlap=opts.overlap,searchRadius=opts.searchRadius;
     const synthesisHop=Math.floor(frameSize*(1-overlap));
     const analysisHop=synthesisHop/factor;
@@ -1312,7 +1314,7 @@ async function getPlayBuffer(spd, silent=false){
     // Calcul dans le Worker (non-bloquant)
     const samples=mono.slice();
     stretched = await new Promise((resolve,reject)=>{
-      const timeout=setTimeout(()=>{ reject(new Error('Worker timeout')); }, 60000);
+      const timeout=setTimeout(()=>{ reject(new Error('Worker timeout')); }, 30000);
       function onMsg(e){
         if(e.data.type==='progress'){
           if(!silent) ob.style.width=e.data.pct+'%';

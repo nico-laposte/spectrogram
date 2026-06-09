@@ -42,6 +42,13 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 .ob{width:150px;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden}
 .ob div{height:100%;width:0%;background:var(--acc);transition:width .12s}
 .ctrl{flex-shrink:0;padding:0 16px 12px;display:flex;flex-direction:column;gap:10px}
+#piano{flex-shrink:0;overflow-x:auto;-webkit-overflow-scrolling:touch;background:#1a1a1a;border-top:1px solid var(--bdr);padding:8px 8px 12px}
+#pianoKeys{position:relative;height:80px;user-select:none}
+.pk-w{position:absolute;bottom:0;background:#f0ede8;border:1px solid #666;border-radius:0 0 4px 4px;box-sizing:border-box;cursor:pointer}
+.pk-w.active{background:#a5d6a7}
+.pk-b{position:absolute;bottom:0;background:#222;border-radius:0 0 3px 3px;z-index:2;cursor:pointer}
+.pk-b.active{background:#388e3c}
+.pk-label{position:absolute;bottom:3px;width:100%;text-align:center;font-size:7px;color:#888;font-family:'DM Mono',monospace}
 .row{display:flex;align-items:center;gap:10px}
 .rl{font-size:9px;color:var(--mut);letter-spacing:.1em;text-transform:uppercase;min-width:40px;flex-shrink:0}
 #pb{width:40px;height:40px;border-radius:50%;background:var(--acc);border:none;display:flex;align-items:center;justify-content:center;flex-shrink:0}
@@ -161,11 +168,17 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
     </div>
 
   </div>
+
+  <!-- Clavier de piano -->
+  <div id="piano">
+    <div id="pianoKeys"></div>
+  </div>
+
 </div>
 
 <script>
 const FFTN = 2048, NCOLS = 600;
-let MFREQ = 8000;  // fréquence max du spectrogramme — change selon le mode
+let MFREQ = 12000;  // fréquence max du spectrogramme — change selon le mode
 
 let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
 let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
@@ -195,7 +208,7 @@ async function load(source){
   // source = File (import manuel) ou ArrayBuffer (depuis hash URL)
   const job = ++busy;
   tip.style.display='none';
-  setOv(true,'Décodage…',5);
+  setOv(true,'Décodage…',10);
   stopAll();
 
   if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
@@ -212,7 +225,7 @@ async function load(source){
   }
   if(job!==busy) return;
 
-  setOv(true,'Décodage audio…',15);
+  setOv(true,'Décodage audio…',20);
   try {
     abuf = await actx.decodeAudioData(bytes.slice(0));
   } catch(e){
@@ -239,8 +252,6 @@ async function load(source){
   computeSpecFull().catch(e=>console.warn('specFull:', e));
 
   await analyze(job);
-  // Précalculer le buffer étiré en arrière-plan si la vitesse n'est pas ×1
-  if(speed !== 1) getPlayBuffer(speed, true).catch(()=>{});
 }
 
 // ── CHARGEMENT AUTOMATIQUE DEPUIS L'URL (#data=base64) ───────────────────
@@ -285,7 +296,7 @@ function fail(file){
 // ── ANALYSE ───────────────────────────────────────────────────────────────
 async function analyze(job){
   drawn=false;
-  setOv(true,'Analyse…',30);
+  setOv(true,'Analyse…',25);
   await tick(30);
 
   const W = sc.parentElement.clientWidth||320;
@@ -317,7 +328,7 @@ async function analyze(job){
       const off=c*maxBin;
       for(let b=0;b<maxBin;b++){ out[off+b]=m[b]; if(m[b]>gMax)gMax=m[b]; }
     }
-    setOv(true,'Analyse…', 30+Math.round(ci/cols*65));
+    setOv(true,'Analyse… '+Math.round(ci/cols*100)+'%',25+Math.round(ci/cols*55));
     await tick(1);
   }
   if(job!==busy) return setOv(false);
@@ -331,12 +342,12 @@ async function analyze(job){
     timeLabels();
   }catch(err){ console.error('draw error:', err); }
   drawn=true;
+  // Afficher le curseur dès la fin de l'analyse pour permettre le drag immédiat
   if(!playing){
     ph.style.display='block';
     drawPlayhead(offset);
   }
   setOv(false);
-  if(speed !== 1) getPlayBuffer(speed, true).catch(()=>{});
 }
 
 function monoMix(buf){
@@ -812,7 +823,7 @@ function autoDetectMode(){
 
   stretchMode = detectedMode;
   if(detectedMode === 'oiseau'){
-    MFREQ=8000; pmin.value=1000; pmax.value=8000;
+    MFREQ=12000; pmin.value=1000; pmax.value=8000;
     showNotes=true; ntg.classList.add('on');
     document.getElementById('modeOiseau').classList.add('on');
     document.getElementById('modeVoix').classList.remove('on');
@@ -946,21 +957,23 @@ function ifftInPlace(re, im){
 }
 
 function timeStretch(input, sr, factor){
-  // Le phase vocoder préserve mieux la hauteur sur tous les types de sons
-  return timeStretchPV(input, sr, factor);
+  return stretchMode==='voix'
+    ? timeStretchPV(input, sr, factor)
+    : timeStretchOLA(input, sr, factor);
 }
 
 // Récupère (ou calcule) le buffer à jouer pour la vitesse demandée
-async function getPlayBuffer(spd, silent=false){
+async function getPlayBuffer(spd){
   if(!spd || isNaN(spd) || spd <= 0) spd = 1;
-  if(Math.abs(spd - 1) < 0.001) return abuf;
+  if(Math.abs(spd - 1) < 0.001) return abuf;   // ×1 direct, même avec arrondi flottant
   const key = String(spd);
   if(stretchCache[key]) return stretchCache[key];
-  if(!silent){ setOv(true, 'Préparation ×'+spd+'…', 50); await tick(20); }
+  setOv(true, 'Préparation ×'+spd+'…', 50);
+  await tick(20);
   const mono = monoMix(abuf);
   const stretched = timeStretch(mono, abuf.sampleRate, 1/spd);
   stretchCache[key] = stretched;
-  if(!silent) setOv(false);
+  setOv(false);
   return stretched;
 }
 
@@ -1134,15 +1147,9 @@ pr.addEventListener('input',e=>{
 });
 document.querySelectorAll('.sb').forEach(b=>b.addEventListener('click',async()=>{
   const w=playing;
-  if(w) pause();
+  if(w) pause();                       // ralentir relance depuis la position courante
   speed=parseFloat(b.dataset.s);
   document.querySelectorAll('.sb').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  await tick(0);  // laisser le navigateur rendre le bouton sélectionné
-  if(abuf && speed !== 1){
-    // Si en lecture : calcul visible avec overlay. Sinon : silencieux en arrière-plan.
-    if(w) await getPlayBuffer(speed);
-    else getPlayBuffer(speed, true).catch(()=>{});
-  }
   if(w) await play();
 }));
 ptg.addEventListener('click',()=>{
@@ -1159,7 +1166,7 @@ ntg.addEventListener('click',()=>{
 });
 document.getElementById('modeOiseau').addEventListener('click',async()=>{
   if(stretchMode==='oiseau') return;
-  stretchMode='oiseau'; MFREQ=8000; FMIN_LOG=80;
+  stretchMode='oiseau'; MFREQ=12000; FMIN_LOG=80;
   pmin.value=1000; pmax.value=8000;
   document.getElementById('lblPitch').textContent='Pitch';
   document.getElementById('modeOiseau').classList.add('on');
@@ -1468,6 +1475,109 @@ function exitZoom(){
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────────────
+// ── CLAVIER DE PIANO ────────────────────────────────────────────────────────
+// Séquence de touches à partir de F3, 2 octaves jusqu'à F5
+// Chaque entrée : {midi, black}
+(function buildPiano(){
+  const WW=28, BW=18, BH=50, WH=80;  // largeurs/hauteurs touches
+  const container=document.getElementById('pianoKeys');
+
+  // Construire la liste des notes F3..F5 (25 notes, 2 octaves + 1)
+  const START=53; // F3
+  const notes=[];
+  for(let i=0;i<=24;i++){
+    const midi=START+i;
+    const pos=midi%12;
+    const isBlack=[1,3,6,8,10].includes(pos);
+    notes.push({midi,isBlack,pos});
+  }
+
+  // Compter les touches blanches pour dimensionner le conteneur
+  const whites=notes.filter(n=>!n.isBlack);
+  const totalW=whites.length*WW;
+  container.style.width=totalW+'px';
+
+  // Créer les touches blanches positionnées
+  const whiteEls={};
+  whites.forEach((n,wi)=>{
+    const k=document.createElement('div');
+    k.className='pk-w';
+    k.style.left=(wi*WW)+'px';
+    k.style.width=WW+'px';
+    k.style.height=WH+'px';
+    k.dataset.midi=n.midi;
+    // Étiquette sur le Fa
+    if(n.pos===5){
+      const lbl=document.createElement('div');
+      lbl.className='pk-label';
+      lbl.textContent='F'+(Math.floor(n.midi/12)-1);
+      k.appendChild(lbl);
+    }
+    k.addEventListener('touchstart',e=>{e.preventDefault();pianoPress(n.midi,k);},{passive:false});
+    k.addEventListener('touchend',  e=>{e.preventDefault();pianoRelease(n.midi,k);},{passive:false});
+    k.addEventListener('mousedown', ()=>pianoPress(n.midi,k));
+    k.addEventListener('mouseup',   ()=>pianoRelease(n.midi,k));
+    container.appendChild(k);
+    whiteEls[n.midi]=wi;
+  });
+
+  // Créer les touches noires positionnées entre les blanches
+  notes.filter(n=>n.isBlack).forEach(n=>{
+    // La touche noire est entre la blanche précédente et la suivante
+    const prevWhiteIdx=whiteEls[n.midi-1];
+    if(prevWhiteIdx===undefined) return;
+    const k=document.createElement('div');
+    k.className='pk-b';
+    // Centrer sur le bord droit de la blanche précédente
+    const left=(prevWhiteIdx+1)*WW - BW/2;
+    k.style.left=left+'px';
+    k.style.width=BW+'px';
+    k.style.height=BH+'px';
+    k.dataset.midi=n.midi;
+    k.addEventListener('touchstart',e=>{e.preventDefault();pianoPress(n.midi,k);},{passive:false});
+    k.addEventListener('touchend',  e=>{e.preventDefault();pianoRelease(n.midi,k);},{passive:false});
+    k.addEventListener('mousedown', ()=>pianoPress(n.midi,k));
+    k.addEventListener('mouseup',   ()=>pianoRelease(n.midi,k));
+    container.appendChild(k);
+  });
+})();
+
+function playPianoNote(midi){
+  if(!actx) actx=new(window.AudioContext||window.webkitAudioContext)();
+  const freq=440*Math.pow(2,(midi-69)/12);
+  const now=actx.currentTime;
+  const master=actx.createGain(); master.gain.value=0.4; master.connect(actx.destination);
+  [1,2,3].forEach((h,i)=>{
+    const osc=actx.createOscillator(), g=actx.createGain();
+    osc.frequency.value=freq*h; osc.type='sine';
+    g.gain.setValueAtTime(0,now);
+    g.gain.linearRampToValueAtTime([0.6,0.25,0.1][i],now+0.01);
+    g.gain.exponentialRampToValueAtTime(0.001,now+2.5);
+    osc.connect(g); g.connect(master); osc.start(now); osc.stop(now+2.5);
+  });
+}
+
+function pianoPress(midi,el){
+  playPianoNote(midi); el.classList.add('active');
+  // Surbrillance : même note toutes octaves
+  if(curve.length && showP){
+    const noteClass=midi%12;
+    const ctx=pc.getContext('2d'), W=pc.width, H=pc.height;
+    if(stretchMode==='musique') drawCurveMusic(H); else drawCurve(H);
+    ctx.fillStyle='rgba(240,200,74,.35)';
+    for(const p of curve){
+      if(!p) continue;
+      const n=hzToNote(p.hz);
+      if(n && n.midi%12===noteClass){ const x=p.t*W; ctx.fillRect(x-1.5,0,3,H); }
+    }
+  }
+}
+
+function pianoRelease(midi,el){
+  el.classList.remove('active');
+  if(drawn){ if(stretchMode==='musique') drawCurveMusic(pc.height); else drawCurve(pc.height); }
+}
+
 function setOv(on,txt,pct){ ov.classList.toggle('on',on); if(txt!==undefined)ot.textContent=txt; if(pct!==undefined)ob.style.width=pct+'%'; }
 function tick(ms){ return new Promise(r=>setTimeout(r,ms||0)); }
 function fmt(s){ s=Math.max(0,s||0); return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'); }

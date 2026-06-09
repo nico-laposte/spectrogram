@@ -42,6 +42,13 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 .ob{width:150px;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden}
 .ob div{height:100%;width:0%;background:var(--acc);transition:width .12s}
 .ctrl{flex-shrink:0;padding:0 16px 12px;display:flex;flex-direction:column;gap:10px}
+#piano{flex-shrink:0;overflow-x:auto;-webkit-overflow-scrolling:touch;background:#1a1a1a;border-top:1px solid var(--bdr);padding:8px 8px 12px}
+#pianoKeys{position:relative;height:80px;user-select:none}
+.pk-w{position:absolute;bottom:0;background:#f0ede8;border:1px solid #666;border-radius:0 0 4px 4px;box-sizing:border-box;cursor:pointer}
+.pk-w.active{background:#a5d6a7}
+.pk-b{position:absolute;bottom:0;background:#222;border-radius:0 0 3px 3px;z-index:2;cursor:pointer}
+.pk-b.active{background:#388e3c}
+.pk-label{position:absolute;bottom:3px;width:100%;text-align:center;font-size:7px;color:#888;font-family:'DM Mono',monospace}
 .row{display:flex;align-items:center;gap:10px}
 .rl{font-size:9px;color:var(--mut);letter-spacing:.1em;text-transform:uppercase;min-width:40px;flex-shrink:0}
 #pb{width:40px;height:40px;border-radius:50%;background:var(--acc);border:none;display:flex;align-items:center;justify-content:center;flex-shrink:0}
@@ -113,6 +120,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
     <div class="ov" id="ov"><div class="sp"></div><div class="ot" id="ot">Analyse…</div><div class="ob"><div id="ob"></div></div></div>
   </div>
 
+
   <div class="ctrl">
     <div class="row">
       <button id="rwb" disabled><svg width="14" height="14" viewBox="0 0 14 14" fill="var(--bg)"><polygon points="1,7 7,1 7,13"/><rect x="7" y="1" width="2" height="12"/><rect x="0" y="1" width="2" height="12"/></svg></button>
@@ -158,294 +166,31 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
         <button class="mdb" id="modeMusique">🎵 Musique</button>
       </div>
     </div>
+
   </div>
+
+  <!-- Clavier de piano -->
+  <div id="piano">
+    <div id="pianoKeys"></div>
+  </div>
+
 </div>
 
 <script>
-// ── CODE INLINE DU WEB WORKER POUR LES OPÉRATIONS LOURDES ────────────────────
-const workerCode = `
-self.onmessage = function(e) {
-  if (e.data.type === 'stretch') {
-    const { mode, samples, sampleRate, factor } = e.data;
-    const input = new Float32Array(samples);
-    let output;
-
-    if (mode === 'oiseau' || mode === 'musique') {
-      output = timeStretchWSOLA(input, factor, mode);
-    } else {
-      output = timeStretchPV(input, sampleRate, factor);
-    }
-
-    self.postMessage({ type: 'done', buffer: output.buffer }, [output.buffer]);
-  }
-};
-
-// ── IMPLEMENTATION WSOLA SÉCURISÉE AVEC RÉFÉRENCE HISTORIQUE ET CONTINUITÉ DE PHASE
-function timeStretchWSOLA(input, factor, mode) {
-  // Ajustements selon les conseils : oiseau = fenêtres courtes, musique = fenêtres longues
-  const frameSize = mode === 'oiseau' ? 1024 : 2048;
-  const overlap = 0.75;
-  const searchRadius = mode === 'oiseau' ? 128 : 512;
-
-  const synthesisHop = Math.floor(frameSize * (1 - overlap));
-  const analysisHop = synthesisHop / factor;
-  const outputLength = Math.round(input.length * factor);
-  const output = new Float32Array(outputLength);
-  const weight = new Float32Array(outputLength);
-
-  const window = new Float32Array(frameSize);
-  for (let i = 0; i < frameSize; i++) {
-    window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (frameSize - 1));
-  }
-
-  // Stockage explicite du dernier segment de référence pour une corrélation parfaite (évite les clics)
-  const refSegment = new Float32Array(frameSize);
-
-  let inPos = 0;
-  let outPos = 0;
-
-  // Première trame
-  for (let i = 0; i < frameSize; i++) {
-    const sample = input[i] || 0;
-    output[i] += sample * window[i];
-    weight[i] += window[i];
-    refSegment[i] = sample;
-  }
-
-  inPos += analysisHop;
-  outPos += synthesisHop;
-
-  while (outPos + frameSize < outputLength && inPos + frameSize < input.length) {
-    const expectedInPos = Math.round(inPos);
-    let bestOffset = 0;
-    let bestScore = -Infinity;
-
-    // Calcul de la cible de corrélation temporelle
-    for (let offset = -searchRadius; offset <= searchRadius; offset++) {
-      const candidatePos = expectedInPos + offset;
-      if (candidatePos < 0 || candidatePos + frameSize >= input.length) continue;
-
-      let corr = 0, energyA = 0, energyB = 0;
-      // Corrélation sur la zone de chevauchement critique
-      for (let i = 0; i < synthesisHop; i++) {
-        const a = input[candidatePos + i];
-        const b = refSegment[synthesisHop + i]; // Comparaison rigoureuse avec l'historique
-        corr += a * b;
-        energyA += a * a;
-        energyB += b * b;
-      }
-
-      const score = corr / (Math.sqrt(energyA * energyB) + 1e-12);
-      if (score > bestScore) {
-        bestScore = score;
-        bestOffset = offset;
-      }
-    }
-
-    const bestInPos = expectedInPos + bestOffset;
-
-    // Sauvegarde de la référence du bloc d'entrée sélectionné pour l'itération suivante
-    for (let i = 0; i < frameSize; i++) {
-      refSegment[i] = input[bestInPos + i] || 0;
-    }
-
-    // Overlap-Add pondéré
-    for (let i = 0; i < frameSize; i++) {
-      const outIndex = outPos + i;
-      if (outIndex >= outputLength) break;
-      const w = window[i];
-      output[outIndex] += refSegment[i] * w;
-      weight[outIndex] += w;
-    }
-
-    inPos += analysisHop;
-    outPos += synthesisHop;
-  }
-
-  // Normalisation de l'enveloppe d'amplitude globale
-  for (let i = 0; i < outputLength; i++) {
-    if (weight[i] > 1e-12) output[i] /= weight[i];
-  }
-
-  return output;
-}
-
-// ── PHASE VOCODER AVEC ENHANCED IDENTITY PHASE LOCKING (MODE VOIX)
-function timeStretchPV(input, sampleRate, factor) {
-  const fftSize = 2048; // Idéal pour préserver la netteté des formants vocaux
-  // Utilisation d'un gros overlap (87.5% soit FFT/8) pour éliminer le flou de phase lors des forts ralentissements
-  const anaHop = fftSize >> 3; 
-  const synHop = Math.round(anaHop * factor);
-
-  const window = new Float32Array(fftSize);
-  for (let i = 0; i < fftSize; i++) {
-    window[i] = Math.sqrt(0.5 * (1 - Math.cos((2 * Math.PI * i) / (fftSize - 1)))); // Sqrt-Hann
-  }
-
-  const outputLength = Math.round(input.length * factor);
-  const output = new Float32Array(outputLength + fftSize);
-  const weight = new Float32Array(outputLength + fftSize);
-
-  let inPos = 0;
-  let outPos = 0;
-
-  const lastPhase = new Float32Array(fftSize / 2 + 1);
-  const phaseAcc = new Float32Array(fftSize / 2 + 1);
-
-  const re = new Float32Array(fftSize);
-  const im = new Float32Array(fftSize);
-
-  while (inPos + fftSize < input.length && outPos + fftSize < output.length) {
-    // 1) Remplissage de la trame d'analyse + application fenêtre
-    for (let i = 0; i < fftSize; i++) {
-      re[i] = input[Math.floor(inPos) + i] * window[i];
-      im[i] = 0;
-    }
-
-    fftInPlace(re, im);
-
-    const numBins = fftSize / 2 + 1;
-    const mag = new Float32Array(numBins);
-    const phase = new Float32Array(numBins);
-    const peaks = new Uint8Array(numBins);
-
-    for (let k = 0; k < numBins; k++) {
-      mag[k] = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
-      phase[k] = Math.atan2(im[k], re[k]);
-    }
-
-    // 2) Détection des pics spectraux locaux pour l'Identity Phase Locking
-    for (let k = 2; k < numBins - 2; k++) {
-      if (mag[k] > mag[k - 1] && mag[k] > mag[k - 2] && mag[k] > mag[k + 1] && mag[k] > mag[k + 2]) {
-        peaks[k] = 1;
-      }
-    }
-
-    // 3) Propagation et verrouillage des phases (Identity Phase Locking)
-    const newPhaseAcc = new Float32Array(numBins);
-    let lastPeakBin = -1;
-
-    for (let k = 0; k < numBins; k++) {
-      if (peaks[k]) lastPeakBin = k;
-      
-      if (lastPeakBin === -1 || mag[k] === 0) {
-        // Mode natif classique si aucun pic n'est encore détecté
-        let deltaPh = phase[k] - lastPhase[k];
-        let expectedDelta = (2 * Math.PI * anaHop * k) / fftSize;
-        let diff = deltaPh - expectedDelta;
-        diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-        let trueFreq = expectedDelta + diff;
-        phaseAcc[k] += trueFreq * factor;
-        newPhaseAcc[k] = phaseAcc[k];
-      } else {
-        // Verrouillage de phase basé sur le pic dominant (Identity Phase Locking)
-        const p = lastPeakBin;
-        if (k === p) {
-          let deltaPh = phase[p] - lastPhase[p];
-          let expectedDelta = (2 * Math.PI * anaHop * p) / fftSize;
-          let diff = deltaPh - expectedDelta;
-          diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-          let trueFreq = expectedDelta + diff;
-          phaseAcc[p] += trueFreq * factor;
-          newPhaseAcc[p] = phaseAcc[p];
-        } else {
-          // Les bins satellites conservent rigoureusement leur relation de phase originale vis-à-vis du pic
-          const phaseDiffOriginale = phase[k] - phase[p];
-          newPhaseAcc[k] = phaseAcc[p] + phaseDiffOriginale;
-        }
-      }
-      lastPhase[k] = phase[k];
-    }
-
-    // Sauvegarde de l'état d'accumulation pour la frame suivante
-    for (let k = 0; k < numBins; k++) phaseAcc[k] = newPhaseAcc[k];
-
-    // 4) Reconstruction de la trame de synthèse fréquentielle
-    for (let k = 0; k < numBins; k++) {
-      re[k] = mag[k] * Math.cos(newPhaseAcc[k]);
-      im[k] = mag[k] * Math.sin(newPhaseAcc[k]);
-      if (k > 0 && k < numBins - 1) {
-        re[fftSize - k] = re[k];
-        im[fftSize - k] = -im[k];
-      }
-    }
-
-    ifftInPlace(re, im);
-
-    // 5) Overlap-Add
-    for (let i = 0; i < fftSize; i++) {
-      const idx = Math.floor(outPos) + i;
-      output[idx] += re[i] * window[i];
-      weight[idx] += window[i] * window[i];
-    }
-
-    inPos += anaHop;
-    outPos += synHop;
-  }
-
-  // Normalisation
-  for (let i = 0; i < outputLength; i++) {
-    if (weight[i] > 1e-12) output[i] /= weight[i];
-  }
-
-  return output.subarray(0, outputLength);
-}
-
-// Helpers FFT in-place légers pour le Worker
-function fftInPlace(re, im) {
-  const N = re.length;
-  for (let i = 1, j = 0; i < N; i++) {
-    let bit = N >> 1;
-    for (; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if (i < j) {
-      let t = re[i]; re[i] = re[j]; re[j] = t;
-      t = im[i]; im[i] = im[j]; im[j] = t;
-    }
-  }
-  for (let len = 2; len <= N; len <<= 1) {
-    const ang = -2 * Math.PI / len, wR = Math.cos(ang), wI = Math.sin(ang);
-    for (let i = 0; i < N; i += len) {
-      let cR = 1, cI = 0;
-      for (let k = 0; k < len >> 1; k++) {
-        const h = i + k + (len >> 1);
-        const vR = re[h] * cR - im[h] * cI, vI = re[h] * cI + im[h] * cR;
-        re[h] = re[i + k] - vR; im[h] = im[i + k] - vI;
-        re[i + k] += vR; im[i + k] += vI;
-        const nR = cR * wR - cI * wI; cI = cR * wI + cI * wR; cR = nR;
-      }
-    }
-  }
-}
-
-function ifftInPlace(re, im) {
-  const N = re.length;
-  for (let i = 0; i < N; i++) im[i] = -im[i];
-  fftInPlace(re, im);
-  for (let i = 0; i < N; i++) { re[i] /= N; im[i] /= N; }
-}
-`;
-
-// Initialisation du Web Worker en tâche de fond
-const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
-const stretchWorker = new Worker(URL.createObjectURL(workerBlob));
-
-// Restitution des variables globales de l'UI principale
 const FFTN = 2048, NCOLS = 600;
-let MFREQ = 8000;  
-let stretchMode = 'oiseau'; // Mode par défaut
+let MFREQ = 12000;  // fréquence max du spectrogramme — change selon le mode
 
 let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
 let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
-let currentPlayPos=0;  
-let curve=[], spec=null, specFull=null;
+let currentPlayPos=0;  // position réelle mise à jour à chaque frame par loop()
+let curve=[], spec=null;
+let curveFull=[];  // courbe de pitch haute résolution sur tout le fichier
+// Fenêtre visible (zoom) en secondes + mode boucle + sélection en cours
 let viewStart=0, viewEnd=0, looping=true;
 let selX0=null, selX1=null, selecting=false, draggingPH=false, draggingPHWasPlaying=false;
-let sliding=false, slideStartX=0, slideStartVS=0, slideStartVE=0;
-
-// Système de cache intelligent indexé par le mode ET la vitesse
-let stretchCache = {};
-function clearStretchCache() { stretchCache = {}; }
+let sliding=false, slideStartX=0, slideStartVS=0, slideStartVE=0, slideTimer=null;
+let slideCurveSnapshot=[], slideVSSnapshot=0, slideVESnapshot=0, slideMinLen=1;
+let stopTimer=null;
 
 const $ = id => document.getElementById(id);
 const iz=$('iz'), ilbl=$('ilbl'), tip=$('tip'), sc=$('sc'), pc=$('pc'), ph=$('ph');
@@ -454,356 +199,48 @@ const pb=$('pb'), rwb=$('rwb'), pi=$('pi'), pf=$('pf'), pr=$('pr'), td=$('td'), 
 const pmin=$('pmin'), pmax=$('pmax');
 const sel=$('sel'), selrd=$('selrd'), loopBtn=$('loopBtn');
 const zoomBadge=$('zoomBadge'), zoomTxt=$('zoomTxt'), zoomExit=$('zoomExit');
+const iosAudio=$('iosAudio');
 
-// Écouteurs pour le changement de Mode
-$('modeOiseau').addEventListener('click', () => changeMode('oiseau', 8000, 1000, 8000));
-$('modeVoix').addEventListener('click', () => changeMode('voix', 4000, 150, 2500));
-$('modeMusique').addEventListener('click', () => changeMode('musique', 5000, 80, 4200));
-
-function changeMode(mode, mfreq, pMinVal, pMaxVal) {
-  if (stretchMode === mode) return;
-  stretchMode = mode;
-  MFREQ = mfreq;
-  pmin.value = pMinVal;
-  pmax.value = pMaxVal;
-
-  document.querySelectorAll('.mdb').forEach(b => b.classList.remove('on'));
-  $('mode' + mode.charAt(0).toUpperCase() + mode.slice(1)).classList.add('on');
-
-  if (abuf) {
-    if (playing) pause();
-    analyze(++busy);
-  }
-}
-
-// Détection automatique simple au chargement du fichier
-function autoDetectMode() {
-  if (!abuf) return;
-  const sr = abuf.sampleRate;
-  const data = monoMix(abuf);
-  const win = hann(1024);
-  const step = Math.floor(data.length / 5);
-  let highEnergy = 0, totalEnergy = 0;
-
-  for (let i = 0; i < 4; i++) {
-    const start = i * step + 2000;
-    const m = fftMag(data, start, 1024, win, 512);
-    for (let b = 0; b < 512; b++) {
-      const hz = (b / 512) * (sr / 2);
-      totalEnergy += m[b];
-      if (hz > 2500) highEnergy += m[b];
-    }
-  }
-
-  if (highEnergy / (totalEnergy + 1e-9) > 0.35) {
-    changeMode('oiseau', 8000, 1000, 8000);
-  } else {
-    changeMode('voix', 4000, 150, 2500);
-  }
-}
-
-// Gestion des boutons de vitesse
-document.querySelectorAll('.sb').forEach(btn => {
-  btn.addEventListener('click', e => {
-    document.querySelectorAll('.sb').forEach(b => b.classList.remove('on'));
-    e.target.classList.add('on');
-    speed = parseFloat(e.target.dataset.s);
-    if (playing) {
-      pause();
-      play();
-    }
-  });
-});
-
-// ── OBTENTION DU AUDIO BUFFER PAR LE WEB WORKER (CACHE INTELLIGENT) ──────────
-async function getPlayBuffer(spd) {
-  const cacheKey = `${stretchMode}:${spd}`; // Résout le bug du cache croisé entre modes !
-  if (stretchCache[cacheKey]) return stretchCache[cacheKey];
-
-  if (spd === 1) {
-    stretchCache[cacheKey] = abuf;
-    return abuf;
-  }
-
-  return new Promise((resolve, reject) => {
-    setOv(true, "Calcul de l'étirement…", 50);
-    const monoSamples = monoMix(abuf);
-
-    // Envoi au Worker en transférant le buffer sans copie mémoire !
-    stretchWorker.postMessage({
-      type: 'stretch',
-      mode: stretchMode,
-      samples: monoSamples.buffer,
-      sampleRate: abuf.sampleRate,
-      factor: 1 / spd
-    }, [monoSamples.buffer]);
-
-    stretchWorker.onmessage = function(e) {
-      if (e.data.type === 'done') {
-        const outSamples = new Float32Array(e.data.buffer);
-        
-        // Reconstruction d'un AudioBuffer standard pour la Web Audio API
-        const newBuf = actx.createBuffer(1, outSamples.length, abuf.sampleRate);
-        newBuf.copyToChannel(outSamples, 0);
-
-        stretchCache[cacheKey] = newBuf;
-        setOv(false);
-        resolve(newBuf);
-      }
-    };
-
-    stretchWorker.onerror = function(err) {
-      setOv(false);
-      reject(err);
-    };
-  });
-}
-
-// ── ARCHITECTURE PLAY / PAUSE LOGIQUE ────────────────────────────────────────
-async function play() {
-  if (playing || !abuf) return;
-  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
-  if (actx.state === 'suspended') await actx.resume();
-
-  try {
-    // Le calcul se fait à la demande lors du Play (zéro temps d'attente à l'import !)
-    const activeBuffer = await getPlayBuffer(speed);
-    
-    src = actx.createBufferSource();
-    src.buffer = activeBuffer;
-    src.connect(actx.destination);
-
-    // Ajustement des temps selon le facteur d'étirement en cours
-    const currentDur = activeBuffer.duration;
-    const ratio = currentDur / dur;
-
-    let startPos = offset * ratio;
-    if (startPos >= currentDur) startPos = viewStart * ratio;
-
-    src.loop = looping;
-    if (looping) {
-      src.loopStart = viewStart * ratio;
-      src.loopEnd = viewEnd * ratio;
-    }
-
-    t0 = actx.currentTime - (startPos / speed);
-    src.start(0, startPos);
-    playing = true;
-    pi.innerHTML = '<path d="M4,2 h3 v12 h-3 z M9,2 h3 v12 h-3 z"/>'; // Icône Pause
-    loop();
-  } catch (e) {
-    console.error("Erreur de lecture :", e);
-  }
-}
-
-function pause() {
-  if (!playing) return;
-  playing = false;
-  cancelAnimationFrame(raf);
-  try { src.stop(); } catch(e){}
-  pi.innerHTML = '<polygon points="4,2 14,8 4,14"/>'; // Icône Play
-  // Resynchronise l'offset global réel
-  offset = currentPlayPos; 
-}
-
-function stopAll() {
-  pause();
-  abuf = null;
-  dur = 0;
-  offset = 0;
-  clearStretchCache();
-  pb.disabled = true; rwb.disabled = true;
-}
-
-function loop() {
-  if (!playing || !abuf) return;
-  
-  // Calcul précis du curseur temporel à la milliseconde
-  const ratio = src.buffer.duration / dur;
-  let elapsed = (actx.currentTime - t0) * speed / ratio;
-
-  if (looping) {
-    const wLen = viewEnd - viewStart;
-    if (elapsed >= viewEnd) {
-      t0 += wLen / speed * ratio;
-      elapsed = viewStart + ((elapsed - viewStart) % wLen);
-    }
-    currentPlayPos = elapsed;
-  } else {
-    currentPlayPos = elapsed;
-    if (currentPlayPos >= viewEnd) {
-      pause();
-      currentPlayPos = viewEnd;
-      drawPlayhead(currentPlayPos);
-      return;
-    }
-  }
-
-  drawPlayhead(currentPlayPos);
-  raf = requestAnimationFrame(loop);
-}
-
-function drawPlayhead(t) {
-  if (!drawn) return;
-  const pctx = pc.getContext('2d');
-  pctx.clearRect(0, 0, pc.width, pc.height);
-
-  const viewLen = viewEnd - viewStart;
-  if (viewLen <= 0) return;
-
-  const r = (t - viewStart) / viewLen;
-  if (r >= 0 && r <= 1) {
-    const x = r * pc.width;
-    ph.style.left = x + 'px';
-    ph.style.display = 'block';
-  } else {
-    ph.style.display = 'none';
-  }
-
-  // Barre de progression basse
-  const totalRatio = (t - viewStart) / viewLen;
-  pf.style.width = Math.min(100, Math.max(0, totalRatio * 100)) + '%';
-  td.textContent = fmt(t) + ' / ' + fmt(viewEnd);
-}
-
-// ── SYSTEME DE ZOOM ET DES COUPLAGES GRAPHIQUES RESTANTS ─────────────────────
-let isZoomed = false;
-function setZoomBadge(on) {
-  isZoomed = on;
-  zoomBadge.classList.toggle('on', on);
-  sc.parentElement.classList.toggle('zoomed', on);
-  if (on) zoomTxt.textContent = `Zoom : ${fmt(viewStart)} – ${fmt(viewEnd)}`;
-}
-
-// Interaction de glissement sur l'axe temporel (Zoom par drag)
-let startX = 0;
-sc.parentElement.addEventListener('mousedown', e => {
-  if (!abuf || e.target === ph) return;
-  selecting = true;
-  startX = e.offsetX;
-  sel.style.left = startX + 'px';
-  sel.style.width = '0px';
-  sel.style.display = 'block';
-});
-
-window.addEventListener('mousemove', e => {
-  if (!selecting) return;
-  const rect = sc.getBoundingClientRect();
-  let curX = e.clientX - rect.left;
-  curX = Math.min(rect.width, Math.max(0, curX));
-
-  const x0 = Math.min(startX, curX);
-  const w = Math.abs(startX - curX);
-  sel.style.left = x0 + 'px';
-  sel.style.width = w + 'px';
-});
-
-window.addEventListener('mouseup', e => {
-  if (!selecting) return;
-  selecting = false;
-  sel.style.display = 'none';
-
-  const rect = sc.getBoundingClientRect();
-  let endX = e.clientX - rect.left;
-  endX = Math.min(rect.width, Math.max(0, endX));
-
-  const w = Math.abs(startX - endX);
-  if (w > 15) { // Seuil minimal de zoom
-    const r0 = Math.min(startX, endX) / rect.width;
-    const r1 = Math.max(startX, endX) / rect.width;
-    const currentLen = viewEnd - viewStart;
-
-    const nextVS = viewStart + r0 * currentLen;
-    const nextVE = viewStart + r1 * currentLen;
-
-    if (nextVE - nextVS > 0.2) { // Zoom max à 200ms
-      viewStart = nextVS;
-      viewEnd = nextVE;
-      offset = viewStart;
-      setZoomBadge(true);
-      if (playing) pause();
-      analyze(++busy);
-    }
-  } else {
-    // Un simple clic déplace la tête de lecture
-    const clickRatio = Math.min(rect.width, Math.max(0, startX)) / rect.width;
-    offset = viewStart + clickRatio * (viewEnd - viewStart);
-    currentPlayPos = offset;
-    drawPlayhead(offset);
-    if (playing) {
-      pause();
-      play();
-    }
-  }
-});
-
-$('zoomExit').addEventListener('click', () => {
-  viewStart = 0; viewEnd = dur; offset = 0;
-  setZoomBadge(false);
-  if (playing) pause();
-  analyze(++busy);
-});
-
-loopBtn.addEventListener('click', () => {
-  looping = !looping;
-  loopBtn.classList.toggle('on', looping);
-  if (playing) {
-    pause();
-    play();
-  }
-});
-
-pb.addEventListener('click', () => { if (playing) pause(); else play(); });
-rwb.addEventListener('click', () => {
-  offset = viewStart;
-  currentPlayPos = offset;
-  drawPlayhead(offset);
-  if (playing) { pause(); play(); }
-});
-
-// Barre de défilement manuelle (Input range)
-$('pr').addEventListener('input', e => {
-  if (!abuf) return;
-  const r = parseInt(e.target.value) / 1000;
-  offset = viewStart + r * (viewEnd - viewStart);
-  currentPlayPos = offset;
-  drawPlayhead(offset);
-});
-
-$('pr').addEventListener('change', () => {
-  if (playing) { pause(); play(); }
-});
-
-// ── IMPORTATION ET ANALYSE ASYNC DU FICHIER ENTIER ───────────────────────────
+// ── IMPORT ────────────────────────────────────────────────────────────────
 $('fi').addEventListener('change', e => { const f=e.target.files[0]; if(f) load(f); });
 
 async function load(source){
+  // source = File (import manuel) ou ArrayBuffer (depuis hash URL)
   const job = ++busy;
   tip.style.display='none';
-  setOv(true,'Décodage…',5);
+  setOv(true,'Décodage…',10);
   stopAll();
 
   if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
+
   let bytes, name;
   if(source instanceof File){
     name = source.name;
     try { bytes = await source.arrayBuffer(); }
     catch(e){ if(job!==busy)return; setOv(false); return fail(source); }
   } else {
-    bytes = source; name = 'enregistrement.m4a';
+    // ArrayBuffer passé directement (chemin URL hash)
+    bytes = source;
+    name = 'enregistrement.m4a';
   }
   if(job!==busy) return;
 
-  setOv(true,'Décodage audio…',15);
-  try { abuf = await actx.decodeAudioData(bytes.slice(0)); } catch(e){
-    if(job!==busy)return; setOv(false); return;
+  setOv(true,'Décodage audio…',20);
+  try {
+    abuf = await actx.decodeAudioData(bytes.slice(0));
+  } catch(e){
+    if(job!==busy)return; setOv(false);
+    if(source instanceof File) fail(source);
+    return;
   }
   if(job!==busy) return;
 
   dur = abuf.duration;
   viewStart = 0; viewEnd = dur; offset = 0;
+  clearStretchCache();
   setZoomBadge(false);
 
+  // Détection automatique du mode selon le spectre énergétique
   autoDetectMode();
 
   ilbl.textContent = name;
@@ -811,13 +248,56 @@ async function load(source){
   em.style.display='none';
   pb.disabled=false; rwb.disabled=false;
 
+  // Calculer le spectrogramme basse résolution de façon asynchrone (ne bloque pas)
+  computeSpecFull().catch(e=>console.warn('specFull:', e));
+
   await analyze(job);
 }
 
+// ── CHARGEMENT AUTOMATIQUE DEPUIS L'URL (#data=base64) ───────────────────
+async function loadFromGithub(){
+  setOv(true,'Chargement…',5);
+  try {
+    // API GitHub : disponible immédiatement après upload, sans délai Pages
+    // Dépôt public → pas de token requis en lecture
+    const resp = await fetch(
+      'https://api.github.com/repos/nico-laposte/spectrogram/contents/input.m4a',
+      { headers: { 'Accept': 'application/vnd.github.v3.raw' } }
+    );
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const bytes = await resp.arrayBuffer();
+    await load(bytes);
+  } catch(e){
+    setOv(false);
+    console.warn('loadFromGithub:', e.message);
+  }
+}
+window.addEventListener('load', ()=>{
+  if(location.search.includes('auto') || location.href.includes('auto')) loadFromGithub();
+});
+
+function fail(file){
+  iz.classList.remove('has');
+  tip.style.display='block';
+  const ext=(file.name||'').split('.').pop().toLowerCase();
+  if(['mov','mp4','m4v'].includes(ext))
+    tip.innerHTML='<strong>Vidéo non décodable par Safari.</strong> '
+      +'Les vidéos iPhone sont souvent filmées en <strong>HEVC / H.265</strong>, un format que Safari ne sait pas décoder dans une page web. Il faut un fichier audio (ou une vidéo <strong>H.264 / AAC</strong>).<br><br>'
+      +'<strong>Extraire l\'audio avec l\'app Raccourcis :</strong><br>'
+      +'① Ouvrez l\'app <strong>Raccourcis</strong> → <strong>+</strong> pour un nouveau raccourci<br>'
+      +'② Ajoutez l\'action <strong>Encoder le média</strong> → activez <strong>Audio uniquement</strong><br>'
+      +'③ Ajoutez l\'action <strong>Enregistrer dans des fichiers</strong><br>'
+      +'④ Lancez le raccourci, choisissez votre vidéo → vous obtenez un <strong>.m4a</strong> à importer ici<br><br>'
+      +'<strong>Pour vos prochains enregistrements :</strong> Réglages → Appareil photo → Formats → <strong>Le plus compatible</strong> (filme en H.264/AAC), ou utilisez l\'app <strong>Dictaphone</strong> qui produit directement des fichiers .m4a importables.';
+  else
+    tip.innerHTML='<strong>Format non reconnu (.'+ext+').</strong> Essayez .mp3, .m4a ou .wav.';
+}
+
+// ── ANALYSE ───────────────────────────────────────────────────────────────
 async function analyze(job){
   drawn=false;
-  setOv(true,'Analyse…',30);
-  await tick(10);
+  setOv(true,'Analyse…',25);
+  await tick(30);
 
   const W = sc.parentElement.clientWidth||320;
   const H = sc.parentElement.clientHeight||200;
@@ -833,11 +313,12 @@ async function analyze(job){
   const out  = new Float32Array(cols*maxBin);
   let gMax=0;
 
+  // Fenêtre visible en échantillons
   const vs = Math.floor(viewStart * sr);
   const ve = Math.min(total, Math.floor(viewEnd * sr));
-  const span = Math.max(FFTN+1, ve - vs);
+  const span = Math.max(FFTN+1, ve - vs);   // au moins une fenêtre FFT
 
-  const STEP=24; // Augmenté pour accélérer le tracé graphique UI
+  const STEP=12;
   for(let ci=0; ci<cols; ci+=STEP){
     if(job!==busy) return setOv(false);
     const end=Math.min(ci+STEP,cols);
@@ -847,7 +328,7 @@ async function analyze(job){
       const off=c*maxBin;
       for(let b=0;b<maxBin;b++){ out[off+b]=m[b]; if(m[b]>gMax)gMax=m[b]; }
     }
-    setOv(true,'Analyse…', 30+Math.round(ci/cols*65));
+    setOv(true,'Analyse… '+Math.round(ci/cols*100)+'%',25+Math.round(ci/cols*55));
     await tick(1);
   }
   if(job!==busy) return setOv(false);
@@ -855,15 +336,17 @@ async function analyze(job){
   spec={out,cols,maxBin,gMax};
   try{
     drawSpec(W,H);
-    makeCurve();
-    drawCurve(H);
+    if(stretchMode==='musique'){ makeCurveMusic(); drawCurveMusic(H); }
+    else { makeCurve(); drawCurve(H); }
     freqLabels();
     timeLabels();
-  }catch(err){ console.error(err); }
-  
+  }catch(err){ console.error('draw error:', err); }
   drawn=true;
-  ph.style.display='block';
-  drawPlayhead(offset);
+  // Afficher le curseur dès la fin de l'analyse pour permettre le drag immédiat
+  if(!playing){
+    ph.style.display='block';
+    drawPlayhead(offset);
+  }
   setOv(false);
 }
 
@@ -874,6 +357,7 @@ function monoMix(buf){
   return o;
 }
 
+// FFT magnitude, returns first maxBin bins
 function fftMag(data,start,N,win,maxBin){
   const re=new Float32Array(N), im=new Float32Array(N);
   for(let i=0;i<N;i++) re[i]=(data[start+i]||0)*win[i];
@@ -895,8 +379,20 @@ function fftMag(data,start,N,win,maxBin){
 }
 
 function hann(N){const w=new Float32Array(N);for(let i=0;i<N;i++)w[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));return w;}
-function hzToY(hz, H){ return (1 - hz/MFREQ) * H; }
-function yToHz(y, H){ return (1 - y/H) * MFREQ; }
+
+// ── DRAW ──────────────────────────────────────────────────────────────────
+// Conversion Hz ↔ position Y selon l'échelle (linéaire ou log)
+let FMIN_LOG = 80;   // borne basse de l'échelle log (Hz) — dynamique en mode musique
+function hzToY(hz, H){ 
+  if(stretchMode !== 'voix') return (1 - hz/MFREQ) * H;
+  const lo=Math.log2(FMIN_LOG), hi=Math.log2(MFREQ);
+  return (1 - (Math.log2(Math.max(hz,FMIN_LOG)) - lo) / (hi - lo)) * H;
+}
+function yToHz(y, H){
+  if(stretchMode !== 'voix') return (1 - y/H) * MFREQ;
+  const lo=Math.log2(FMIN_LOG), hi=Math.log2(MFREQ);
+  return Math.pow(2, lo + (1 - y/H) * (hi - lo));
+}
 
 function drawSpec(W,H){
   const {out,cols,maxBin,gMax}=spec;
@@ -905,10 +401,10 @@ function drawSpec(W,H){
     const ci=Math.min(Math.floor(x/W*cols),cols-1), off=ci*maxBin;
     for(let y=0;y<H;y++){
       const hz = yToHz(y, H);
-      const binF = hz/MFREQ*maxBin;
+      const binF = hz/MFREQ*maxBin;          // bin flottant
       const b0 = Math.floor(binF);
       const b1 = Math.min(b0+1, maxBin-1);
-      const t  = binF - b0;
+      const t  = binF - b0;                  // fraction pour interpolation
       const val = (out[off+b0]||0)*(1-t) + (out[off+b1]||0)*t;
       const [r,g,b]=color(val/(gMax||1));
       const i=(y*W+x)*4; px[i]=r;px[i+1]=g;px[i+2]=b;px[i+3]=255;
@@ -918,62 +414,1177 @@ function drawSpec(W,H){
 }
 
 function makeCurve(){
-  const {out,cols,maxBin,gMax}=spec;
+  const {out,cols,maxBin}=spec;
+  // Utiliser le gMax global (specFull) comme référence stable — évite que le seuil
+  // change selon la région affichée (sinon plus de points apparaissent sur les régions calmes)
+  const gMaxRef = (specFull && specFull.gMaxHi) ? specFull.gMaxHi : spec.gMax;
   const p1=parseInt(pmin.value)||1000, p2=parseInt(pmax.value)||8000;
   const b1=Math.floor(p1/MFREQ*maxBin), b2=Math.ceil(p2/MFREQ*maxBin);
   curve=[];
   for(let c=0;c<cols;c++){
     const off=c*maxBin; let mv=0,pk=-1;
     for(let b=b1;b<=Math.min(b2,maxBin-1);b++){if(out[off+b]>mv){mv=out[off+b];pk=b;}}
-    curve.push(pk>=0&&mv>gMax*0.04 ? {t:c/cols,hz:pk/maxBin*MFREQ} : null);
+    curve.push(pk>=0&&mv>gMaxRef*0.04 ? {t:c/cols,hz:pk/maxBin*MFREQ} : null);
   }
+}
+
+// Convertit une fréquence en nom de note anglais + octave (ex: 440 -> "A4")
+// ── MODE MUSIQUE : courbe multi-voix avec suppression des harmoniques ────────
+let curveMusic = [];  // tableau de tableaux : curveMusic[col] = [{hz, midi}, ...]
+
+function makeCurveMusic(){
+  const {out,cols,maxBin,gMax}=spec;
+  const MAX_VOICES = 6;
+  const HARM_TOL   = 0.015;
+  const gMaxRef = (specFull && specFull.gMaxHi) ? specFull.gMaxHi : spec.gMax;
+  const THRESH  = gMaxRef * 0.03;
+  // Plage musique : 80-4200 Hz
+  const b1=Math.floor(80/MFREQ*maxBin), b2=Math.ceil(4200/MFREQ*maxBin);
+
+  curveMusic=[];
+  for(let c=0;c<cols;c++){
+    const off=c*maxBin;
+
+    // 1) Trouver tous les pics locaux dans la plage
+    const peaks=[];
+    for(let b=b1+1;b<Math.min(b2,maxBin-1);b++){
+      const v=out[off+b];
+      if(v>THRESH && v>out[off+b-1] && v>out[off+b+1]){
+        peaks.push({b, hz:b/maxBin*MFREQ, v});
+      }
+    }
+    // Trier par amplitude décroissante
+    peaks.sort((a,b)=>b.v-a.v);
+
+    // 2) Supprimer les harmoniques
+    const fundamentals=[];
+    for(const p of peaks){
+      let isHarmonic=false;
+      for(const f of fundamentals){
+        // Vérifier si p.hz est un multiple entier de f.hz
+        const ratio=p.hz/f.hz;
+        const nearest=Math.round(ratio);
+        if(nearest>=2 && nearest<=8 && Math.abs(ratio-nearest)/nearest < HARM_TOL){
+          isHarmonic=true; break;
+        }
+      }
+      if(!isHarmonic){
+        const n=hzToNote(p.hz);
+        if(n) fundamentals.push({hz:p.hz, midi:n.midi, label:n.label});
+        if(fundamentals.length>=MAX_VOICES) break;
+      }
+    }
+    curveMusic.push({t:c/cols, notes:fundamentals});
+  }
+}
+
+function drawCurveMusic(H){
+  const ctx=pc.getContext('2d'), W=pc.width;
+  ctx.clearRect(0,0,W,H);
+  if(!showP||!curveMusic.length) return;
+  const yOf=hz=>hzToY(hz,H);
+
+  // Dessiner les points (rouge comme la courbe mono-voix)
+  ctx.fillStyle='rgba(255,80,80,.95)';
+  for(const frame of curveMusic){
+    const x=frame.t*W;
+    for(const n of frame.notes){
+      const y=yOf(n.hz);
+      ctx.beginPath(); ctx.arc(x,y,1.8,0,6.283); ctx.fill();
+    }
+  }
+
+  // Étiquettes des notes tenues
+  if(showNotes) labelHeldNotesMusic(ctx,W,H,yOf);
+}
+
+function labelHeldNotesMusic(ctx,W,H,yOf){
+  const MIN_LEN=5;
+  ctx.font='600 9px "DM Mono",monospace';
+  ctx.textBaseline='top';
+  ctx.textAlign='center';
+
+  // Pour chaque voix MIDI, trouver les segments tenus
+  // Regrouper par midi sur des fenêtres glissantes
+  const midiMap={};  // midi → [{t, hz}]
+  for(const frame of curveMusic){
+    const seen=new Set();
+    for(const n of frame.notes){
+      seen.add(n.midi);
+      if(!midiMap[n.midi]) midiMap[n.midi]=[];
+      midiMap[n.midi].push({t:frame.t, hz:n.hz, label:n.label});
+    }
+  }
+
+  const placed=[];
+  for(const midi of Object.keys(midiMap)){
+    const pts=midiMap[midi];
+    let i=0;
+    while(i<pts.length){
+      // Grouper les points consécutifs (tolérance de 2 trames)
+      let j=i+1;
+      while(j<pts.length && pts[j].t-pts[j-1].t < 3/curveMusic.length) j++;
+      const cnt=j-i;
+      if(cnt>=MIN_LEN){
+        const midT=(pts[i].t+pts[j-1].t)/2;
+        const avgHz=pts.slice(i,j).reduce((s,p)=>s+p.hz,0)/cnt;
+        const x=midT*W, baseY=yOf(avgHz)-16;
+        const w=ctx.measureText(pts[i].label).width;
+        let y=baseY;
+        // Anti-collision simple
+        for(const p of placed){
+          if(Math.abs(p.x-x)<w+4 && Math.abs(p.y-y)<12) y-=13;
+        }
+        if(y<2) y=yOf(avgHz)+5;
+        placed.push({x,y});
+        ctx.fillStyle='rgba(10,15,10,.55)';
+        ctx.fillRect(x-w/2-2,y,w+4,11);
+        ctx.fillStyle='rgba(255,225,140,.95)';
+        ctx.fillText(pts[i].label,x,y+1);
+      }
+      i=j;
+    }
+  }
+  ctx.textBaseline='middle';
+  ctx.fillStyle='rgba(255,80,80,.95)';
+}
+
+function hzToNote(hz){
+  if(!hz||hz<=0) return null;
+  const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const midi=Math.round(69 + 12*Math.log2(hz/440));
+  const name=names[((midi%12)+12)%12];
+  const oct=Math.floor(midi/12)-1;
+  return {label:name+oct, midi, cents:Math.round(100*(69+12*Math.log2(hz/440)-midi))};
 }
 
 function drawCurve(H){
-  const ctx=pc.getContext('2d'), W=pc.width;
-  if(!showP||!curve.length) return;
-  ctx.fillStyle='rgb(255,80,80)';
-  for(const pt of curve){
-    if(!pt) continue;
-    ctx.fillRect(pt.t*W - 1, hzToY(pt.hz,H) - 1, 2.5, 2.5);
+  const ctx=pc.getContext('2d'), W=pc.width; H=H||pc.height;
+  ctx.clearRect(0,0,W,H);
+  if(!curve.length) return;
+  const yOf=hz=>hzToY(hz,H);
+
+  if(showP){
+    const p1=parseInt(pmin.value)||1000, p2=parseInt(pmax.value)||8000;
+    // Bande de plage pitch (discrète)
+    const y1=(1-p2/MFREQ)*H, y2=(1-p1/MFREQ)*H;
+    ctx.fillStyle='rgba(240,200,74,.04)'; ctx.fillRect(0,y1,W,y2-y1);
+    ctx.strokeStyle='rgba(240,200,74,.15)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+    [y1,y2].forEach(y=>{ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();});
+    ctx.setLineDash([]);
+    // Points de pitch façon Praat
+    ctx.fillStyle='rgba(255,80,80,.95)';
+    for(const p of curve){
+      if(!p) continue;
+      const x=p.t*W, y=yOf(p.hz);
+      ctx.beginPath(); ctx.arc(x,y,1.6,0,6.283); ctx.fill();
+    }
   }
+
+  // Étiquettes de notes (indépendantes de l'affichage de la courbe)
+  if(showNotes) labelHeldNotes(ctx,W,H,yOf);
 }
 
-function color(v){
-  v=Math.max(0,Math.min(1,v));
-  // Palette Sonore Émeraude/Sombre
-  return [Math.round(v*126), Math.round(v*207), Math.round(v*110)];
+// Détecte les plateaux de hauteur stables et y pose une étiquette de note,
+// en évitant les superpositions (espacement minimal en pixels).
+function labelHeldNotes(ctx,W,H,yOf){
+  const MIN_LEN = window._overrideMinLen !== undefined ? window._overrideMinLen : 5;
+  ctx.font='600 9px "DM Mono", monospace';
+  ctx.textBaseline='middle';
+  ctx.textAlign='center';
+
+  // 1) collecter les segments tenus candidats
+  const labels=[];
+  let i=0;
+  while(i<curve.length){
+    if(!curve[i]){ i++; continue; }
+    const n0=hzToNote(curve[i].hz);
+    let j=i+1, sumHz=curve[i].hz, cnt=1;
+    while(j<curve.length && curve[j]){
+      const nj=hzToNote(curve[j].hz);
+      if(!nj || nj.midi!==n0.midi) break;
+      sumHz+=curve[j].hz; cnt++; j++;
+    }
+    if(cnt>=MIN_LEN){
+      const midT=(curve[i].t+curve[j-1].t)/2;
+      const avgHz=sumHz/cnt;
+      labels.push({x:midT*W, y:yOf(avgHz), lab:hzToNote(avgHz).label});
+    }
+    i=j;
+  }
+
+  if(!labels.length) return;
+
+  // 2) chaque étiquette est posée juste AU-DESSUS de son point sur la courbe
+  ctx.textBaseline='top';
+  for(const L of labels){
+    const w=ctx.measureText(L.lab).width;
+    let y=L.y-28;                      // au-dessus du point de la courbe
+    if(y < 0) y=L.y+5;                 // si trop haut, repasser en dessous
+    ctx.fillStyle='rgba(10,15,10,.55)';
+    ctx.fillRect(L.x-w/2-2, y, w+4, 11);
+    ctx.fillStyle='rgba(255,225,140,.95)';
+    ctx.fillText(L.lab, L.x, y+1);
+  }
+  ctx.textBaseline='middle';
+  ctx.fillStyle='rgba(255,80,80,.95)';
 }
 
 function freqLabels(){
   flbl.innerHTML='';
-  const steps=4;
-  for(let i=0;i<=steps;i++){
-    const f=Math.round(i/steps*MFREQ);
-    const y=hzToY(f,sc.height);
-    const s=document.createElement('span'); s.textContent=f+'Hz'; s.style.top=y+'px';
+  const H = sc.height || 300;
+  const marks = stretchMode==='voix'
+    ? [6000,4000,2000,1000,500,250,125]
+    : [10000,8000,6000,4000,2000,1000,500];
+  marks.forEach(hz=>{
+    if(hz>MFREQ||hz<FMIN_LOG) return;
+    const s=document.createElement('span');
+    s.textContent=hz>=1000?hz/1000+'k':hz;
+    s.style.top=(hzToY(hz,H)/H*100)+'%';
     flbl.appendChild(s);
-  }
+  });
 }
-
 function timeLabels(){
   tlbl.innerHTML='';
-  const span=viewEnd-viewStart;
-  const steps=3;
-  for(let i=0;i<=steps;i++){
-    const t=viewStart+i/steps*span;
-    const s=document.createElement('span'); s.textContent=fmt(t);
-    tlbl.appendChild(s);
+  for(let i=0;i<=5;i++){const s=document.createElement('span');s.textContent=fmt(viewStart+i/5*(viewEnd-viewStart));tlbl.appendChild(s);}
+}
+
+function color(t){
+  t=Math.pow(Math.max(0,Math.min(1,t)),.35);
+  const s=[[0,[10,15,10]],[.15,[10,40,30]],[.35,[20,80,60]],[.55,[60,150,80]],[.72,[140,210,60]],[.88,[230,220,40]],[1,[255,240,180]]];
+  for(let i=1;i<s.length;i++){if(t<=s[i][0]){const lo=s[i-1][1],hi=s[i][1],f=(t-s[i-1][0])/(s[i][0]-s[i-1][0]);return[lo[0]+f*(hi[0]-lo[0]),lo[1]+f*(hi[1]-lo[1]),lo[2]+f*(hi[2]-lo[2])].map(Math.round);}}
+  return[255,240,180];
+}
+
+// ── PLAYBACK ──────────────────────────────────────────────────────────────
+// ── TIME-STRETCH (OLA, hauteur préservée) ───────────────────────────────────
+// Cache des buffers ralentis par vitesse. ×1 = abuf direct (pas de traitement).
+let stretchCache = {};        // { "0.5": AudioBuffer, ... }
+let specFull = null;          // spectrogramme basse résolution du fichier entier
+let playBuf = null;           // buffer actuellement joué (abuf ou version étirée)
+let stretchMode = 'oiseau';   // 'oiseau' = OLA, 'voix' = phase vocoder
+
+function clearStretchCache(){ stretchCache = {}; }
+
+// Calcule un spectrogramme basse résolution du fichier entier.
+// Utilisé pour le rendu en temps réel pendant le glissement.
+// Dessine le spectrogramme basse résolution pour la fenêtre [vs, ve]
+// Utilisé pendant le glissement pour un rendu temps réel sans recalcul FFT
+// Dessine la courbe haute résolution sauvegardée, décalée selon la nouvelle fenêtre
+function drawCurveFromFull(vs, ve){
+  const ctx=pc.getContext('2d'), W=pc.width, H=pc.height;
+  ctx.clearRect(0,0,W,H);
+  if(!showP) return;
+  const winLen = ve - vs;
+  const snapLen = slideVESnapshot - slideVSSnapshot;
+  if(winLen<=0 || snapLen<=0) return;
+  const yOf=hz=>hzToY(hz,H);
+
+  // La courbe snapshot couvre [slideVSSnapshot, slideVESnapshot] en proportion t∈[0,1]
+  // On la remonte en temps absolu, puis on la projette sur la nouvelle fenêtre [vs, ve]
+  ctx.fillStyle='rgba(255,80,80,.9)';
+  const visible=[];
+  for(const p of slideCurveSnapshot){
+    if(!p) continue;
+    // Convertir t (proportion dans la snapshot) en temps absolu
+    const tAbs = slideVSSnapshot + p.t * snapLen;
+    if(tAbs < vs || tAbs > ve) continue;
+    const x = (tAbs - vs) / winLen * W;
+    const y = yOf(p.hz);
+    ctx.beginPath(); ctx.arc(x,y,1.6,0,6.283); ctx.fill();
+    visible.push({t:(tAbs-vs)/winLen, hz:p.hz});
+  }
+
+  // Notes depuis la courbe haute résolution
+  if(showNotes && visible.length >= 2){
+    const savedCurve = curve;
+    curve = visible;
+    const savedML = window._overrideMinLen;
+    window._overrideMinLen = slideMinLen;  // valeur fixe, stable pendant le glissement
+    try { labelHeldNotes(ctx, W, H, yOf); } catch(e){}
+    curve = savedCurve;
+    window._overrideMinLen = savedML;
+  }
+  ctx.fillStyle='rgba(255,80,80,.9)';
+}
+
+function drawSpecFromFull(vs, ve){
+  if(!specFull) return;
+  const {out, cols, maxBin, gMax, dur:totalDur} = specFull;
+  const W=sc.width, H=sc.height;
+  const ctx=sc.getContext('2d');
+  const img=ctx.createImageData(W,H), px=img.data;
+  for(let x=0; x<W; x++){
+    // position temporelle de ce pixel dans la fenêtre demandée
+    const t = vs + (x/W) * (ve-vs);
+    const ci = Math.min(Math.floor(t/totalDur * cols), cols-1);
+    const off = ci * maxBin;
+    for(let y=0; y<H; y++){
+      const hz = yToHz(y, H);
+      const binF = hz/MFREQ*maxBin;
+      const b0 = Math.min(Math.floor(binF), maxBin-1);
+      const b1 = Math.min(b0+1, maxBin-1);
+      const tf  = binF - b0;
+      const val = (out[off+b0]||0)*(1-tf) + (out[off+b1]||0)*tf;
+      const [r,g,b]=color(val/(gMax||1));
+      const i=(y*W+x)*4; px[i]=r; px[i+1]=g; px[i+2]=b; px[i+3]=255;
+    }
+  }
+  ctx.putImageData(img,0,0);
+}
+
+async function computeSpecFull(){
+  if(!abuf) return;
+  const COLS_LO = 400, FFTN_LO = 512;
+  const data = monoMix(abuf);
+  const sr = abuf.sampleRate;
+  const total = data.length;
+  const bins = FFTN_LO / 2;
+  const mfreq = MFREQ;
+  const maxBin = Math.min(bins - 1, Math.floor(mfreq / (sr/2) * bins));
+  const win = hann(FFTN_LO);
+  const out = new Float32Array(COLS_LO * maxBin);
+  let gMax = 0;
+  // Traitement par chunks pour ne pas bloquer le thread
+  for(let c=0; c<COLS_LO; c++){
+    if(c % 20 === 0) await tick(1);  // pause toutes les 20 colonnes
+    const start = Math.floor(c / COLS_LO * (total - FFTN_LO));
+    const m = fftMag(data, start, FFTN_LO, win, maxBin);
+    const off = c * maxBin;
+    for(let b=0; b<maxBin; b++){ out[off+b]=m[b]; if(m[b]>gMax) gMax=m[b]; }
+  }
+
+  // gMax haute résolution sur 50 points échantillonnés
+  const FFTN_HI = 2048;
+  const binsHi = FFTN_HI / 2;
+  const maxBinHi = Math.min(binsHi-1, Math.floor(mfreq/(sr/2)*binsHi));
+  const winHi = hann(FFTN_HI);
+  let gMaxHi = 0;
+  const COLS_SCAN = 50;
+  for(let c=0; c<COLS_SCAN; c++){
+    if(c % 10 === 0) await tick(1);
+    const start = Math.floor(c / COLS_SCAN * (total - FFTN_HI));
+    const m = fftMag(data, start, FFTN_HI, winHi, maxBinHi);
+    for(let b=0; b<maxBinHi; b++) if(m[b]>gMaxHi) gMaxHi=m[b];
+  }
+
+  specFull = {out, cols:COLS_LO, maxBin, gMax, gMaxHi, dur};
+
+  // Courbe de pitch sur tout le fichier
+  const p1=parseInt(pmin.value)||1000, p2=parseInt(pmax.value)||8000;
+  const b1f=Math.floor(p1/MFREQ*maxBin), b2f=Math.ceil(p2/MFREQ*maxBin);
+  curveFull=[];
+  for(let c=0;c<COLS_LO;c++){
+    const off=c*maxBin; let mv=0,pk=-1;
+    for(let b=b1f;b<=Math.min(b2f,maxBin-1);b++){if(out[off+b]>mv){mv=out[off+b];pk=b;}}
+    const t = c/COLS_LO * total/sr;
+    curveFull.push(pk>=0&&mv>gMaxHi*0.04 ? {t, hz:pk/maxBin*MFREQ} : null);
   }
 }
 
-function fmt(s){ s=Math.max(0,s||0); return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'); }
+// Détecte automatiquement le mode (oiseau/voix) selon le spectre du fichier.
+// Compare l'énergie dans les hautes fréquences (>2kHz) vs basses (<2kHz).
+// Un chant d'oiseau a typiquement plus d'énergie en haut.
+function autoDetectMode(){
+  if(!abuf) return;
+  const data = monoMix(abuf);
+  const sr = abuf.sampleRate;
+  const N = 4096;
+  const win = hann(N);
+  const bins = N/2;
+  const cutBin = Math.floor(2000 / (sr/2) * bins);
+
+  // Analyser 8 extraits répartis sur le fichier, garder le ratio max
+  // (le moment le plus riche spectralement est le plus représentatif)
+  let maxRatio = 0;
+  const nSamples = 8;
+  for(let s=0; s<nSamples; s++){
+    const pos = Math.floor((s + 0.5) / nSamples * (data.length - N));
+    const re = new Float32Array(N), im = new Float32Array(N);
+    for(let i=0;i<N;i++) re[i] = (data[pos+i]||0) * win[i];
+    fftInPlace(re, im);
+
+    let eLow=0, eHigh=0;
+    for(let b=1;b<bins;b++){
+      const mag = re[b]*re[b] + im[b]*im[b];
+      if(b < cutBin) eLow  += mag;
+      else           eHigh += mag;
+    }
+    const total = eLow + eHigh + 1e-10;
+    // Ignorer les extraits trop silencieux (énergie totale trop faible)
+    if(total < 1e-6) continue;
+    const ratio = eHigh / total;
+    if(ratio > maxRatio) maxRatio = ratio;
+  }
+
+  // Seuil : ratio max > 0.25 → probablement un oiseau
+  const detectedMode = maxRatio > 0.25 ? 'oiseau' : 'voix';
+  if(detectedMode === stretchMode) return;
+
+  stretchMode = detectedMode;
+  if(detectedMode === 'oiseau'){
+    MFREQ=12000; pmin.value=1000; pmax.value=8000;
+    showNotes=true; ntg.classList.add('on');
+    document.getElementById('modeOiseau').classList.add('on');
+    document.getElementById('modeVoix').classList.remove('on');
+    document.getElementById('modeMusique').classList.remove('on');
+  } else {
+    MFREQ=8000; pmin.value=80; pmax.value=1100;
+    showNotes=false; ntg.classList.remove('on');
+    document.getElementById('modeVoix').classList.add('on');
+    document.getElementById('modeOiseau').classList.remove('on');
+    document.getElementById('modeMusique').classList.remove('on');
+  }
+}
+
+// Overlap-add time stretch. factor>1 allonge (ralentit) sans changer la hauteur.
+// Sur un signal mono. Fenêtre de Hann, recouvrement 50%.
+function timeStretchOLA(input, sr, factor){
+  const N = input.length;
+  const frame = 1024;
+  const synHop = frame >> 1;
+  const anaHop = synHop / factor;
+  const outLen = Math.ceil(N * factor) + frame;
+  const out = new Float32Array(outLen);
+  const winSum = new Float32Array(outLen);
+  const w = hann(frame);
+  let ana = 0, syn = 0;
+  while(ana + frame < N){
+    const a0 = Math.floor(ana);
+    for(let i=0;i<frame;i++){
+      const s = (input[a0+i]||0) * w[i];
+      out[syn+i]    += s;
+      winSum[syn+i] += w[i];
+    }
+    ana += anaHop;
+    syn += synHop;
+  }
+  for(let i=0;i<outLen;i++){ if(winSum[i]>1e-6) out[i] /= winSum[i]; }
+  const buf = actx.createBuffer(1, outLen, sr);
+  buf.getChannelData(0).set(out);
+  return buf;
+}
+
+// Phase vocoder time stretch — meilleur sur la voix humaine.
+// Préserve la cohérence de phase entre trames successives.
+function timeStretchPV(input, sr, factor){
+  const N = input.length;
+  // Adapter la taille FFT selon le facteur d'étirement — plus grand = moins de craquements
+  const fftSize = factor >= 3 ? 8192 : factor >= 2 ? 4096 : 2048;
+  const hop = fftSize >> 2;   // 75% overlap
+  const synHop = Math.round(hop * factor);
+  const outLen = Math.ceil(N * factor) + fftSize;
+  const out = new Float32Array(outLen);
+  const winSum = new Float32Array(outLen);
+  const w = hann(fftSize);
+
+  const phaseAcc = new Float32Array(fftSize);
+  const lastPhase = new Float32Array(fftSize);
+  const TWO_PI = 2 * Math.PI;
+
+  let anaPos = 0, synPos = 0;
+  while(anaPos + fftSize < N){
+    const re = new Float32Array(fftSize);
+    const im = new Float32Array(fftSize);
+    for(let i=0;i<fftSize;i++) re[i] = (input[Math.floor(anaPos)+i]||0) * w[i];
+
+    fftInPlace(re, im);
+
+    for(let k=0;k<fftSize/2;k++){
+      const mag = Math.sqrt(re[k]*re[k] + im[k]*im[k]);
+      const phase = Math.atan2(im[k], re[k]);
+      let dPhase = phase - lastPhase[k] - (TWO_PI * k * hop / fftSize);
+      dPhase -= TWO_PI * Math.round(dPhase / TWO_PI);
+      const trueFreq = TWO_PI * k / fftSize + dPhase / hop;
+      phaseAcc[k] += synHop * trueFreq;
+      lastPhase[k] = phase;
+      re[k] = mag * Math.cos(phaseAcc[k]);
+      im[k] = mag * Math.sin(phaseAcc[k]);
+      if(k > 0 && k < fftSize/2){
+        re[fftSize-k] = re[k];
+        im[fftSize-k] = -im[k];
+      }
+    }
+
+    ifftInPlace(re, im);
+
+    for(let i=0;i<fftSize;i++){
+      out[synPos+i]    += re[i] * w[i];
+      winSum[synPos+i] += w[i] * w[i];
+    }
+    anaPos += hop;
+    synPos += synHop;
+  }
+
+  for(let i=0;i<outLen;i++){ if(winSum[i]>1e-6) out[i] /= winSum[i]; }
+  const buf = actx.createBuffer(1, outLen, sr);
+  buf.getChannelData(0).set(out);
+  return buf;
+}
+
+// FFT en place (Cooley-Tukey radix-2)
+function fftInPlace(re, im){
+  const N = re.length;
+  for(let i=1,j=0;i<N;i++){
+    let bit=N>>1;
+    for(;j&bit;bit>>=1) j^=bit;
+    j^=bit;
+    if(i<j){ let t=re[i]; re[i]=re[j]; re[j]=t; t=im[i]; im[i]=im[j]; im[j]=t; }
+  }
+  for(let len=2;len<=N;len<<=1){
+    const ang=-2*Math.PI/len;
+    const wRe=Math.cos(ang), wIm=Math.sin(ang);
+    for(let i=0;i<N;i+=len){
+      let curRe=1, curIm=0;
+      for(let j=0;j<len/2;j++){
+        const uRe=re[i+j], uIm=im[i+j];
+        const vRe=re[i+j+len/2]*curRe-im[i+j+len/2]*curIm;
+        const vIm=re[i+j+len/2]*curIm+im[i+j+len/2]*curRe;
+        re[i+j]=uRe+vRe; im[i+j]=uIm+vIm;
+        re[i+j+len/2]=uRe-vRe; im[i+j+len/2]=uIm-vIm;
+        const newRe=curRe*wRe-curIm*wIm;
+        curIm=curRe*wIm+curIm*wRe; curRe=newRe;
+      }
+    }
+  }
+}
+
+function ifftInPlace(re, im){
+  for(let i=0;i<im.length;i++) im[i]=-im[i];
+  fftInPlace(re, im);
+  const N=re.length;
+  for(let i=0;i<N;i++){ re[i]/=N; im[i]=-im[i]/N; }
+}
+
+function timeStretch(input, sr, factor){
+  return stretchMode==='voix'
+    ? timeStretchPV(input, sr, factor)
+    : timeStretchOLA(input, sr, factor);
+}
+
+// Récupère (ou calcule) le buffer à jouer pour la vitesse demandée
+async function getPlayBuffer(spd){
+  if(!spd || isNaN(spd) || spd <= 0) spd = 1;
+  if(Math.abs(spd - 1) < 0.001) return abuf;   // ×1 direct, même avec arrondi flottant
+  const key = String(spd);
+  if(stretchCache[key]) return stretchCache[key];
+  setOv(true, 'Préparation ×'+spd+'…', 50);
+  await tick(20);
+  const mono = monoMix(abuf);
+  const stretched = timeStretch(mono, abuf.sampleRate, 1/spd);
+  stretchCache[key] = stretched;
+  setOv(false);
+  return stretched;
+}
+
+// ── PLAYBACK ────────────────────────────────────────────────────────────────
+// On joue playBuf à playbackRate=1 → hauteur préservée.
+// Lecture confinée à la fenêtre visible [viewStart, viewEnd] (temps réel).
+// Le buffer étiré a une échelle = temps_réel / speed.
+// Garantit un contexte audio en état 'running'. Gère l'état iOS 'interrupted'.
+async function ensureContext(){
+  if(actx && actx.state==='running') return;
+  // 1) tenter resume()
+  if(actx){
+    try{ await actx.resume(); }catch(e){}
+    let tries=0;
+    while(actx.state!=='running' && actx.state!=='closed' && tries<8){ await tick(10); tries++; }
+    if(actx.state==='running') return;
+  }
+  // 2) échec → recréer un contexte neuf et y reconstruire le buffer PCM
+  const oldBuf = abuf;
+  try{ if(actx) actx.close(); }catch(e){}
+  actx = new (window.AudioContext||window.webkitAudioContext)();
+  try{ await actx.resume(); }catch(e){}
+  if(oldBuf){
+    // recopier les données PCM dans un buffer du nouveau contexte
+    const nb = actx.createBuffer(oldBuf.numberOfChannels, oldBuf.length, oldBuf.sampleRate);
+    for(let ch=0; ch<oldBuf.numberOfChannels; ch++){
+      nb.copyToChannel ? nb.copyToChannel(oldBuf.getChannelData(ch), ch)
+                       : nb.getChannelData(ch).set(oldBuf.getChannelData(ch));
+    }
+    abuf = nb;
+  }
+  clearStretchCache();   // les buffers étirés appartenaient à l'ancien contexte
+}
+
+// iosAudio keep-alive : maintient la session audio iOS active (mode silencieux)
+// Joue un WAV silencieux court en boucle — aucun lien avec le contenu réel
+function makeSilentWavURL(){
+  const sr=44100, dur=2, len=sr*dur;
+  const buf=new ArrayBuffer(44+len*2);
+  const v=new DataView(buf);
+  const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  w(0,'RIFF'); v.setUint32(4,36+len*2,true); w(8,'WAVE');
+  w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,1,true); v.setUint32(24,sr,true);
+  v.setUint32(28,sr*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  w(36,'data'); v.setUint32(40,len*2,true);
+  // données = zéros (silence)
+  return URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+}
+const SILENT_WAV_URL = makeSilentWavURL();
+
+async function play(){
+  if(!abuf) return;
+  clearTimeout(stopTimer);
+  try{
+    if(actx){ actx.resume();
+      const b=actx.createBuffer(1,1,actx.sampleRate);
+      const s=actx.createBufferSource(); s.buffer=b; s.connect(actx.destination); s.start(0);
+    }
+  }catch(e){}
+  await ensureContext();
+  playBuf = await getPlayBuffer(speed);
+
+  // iosAudio keep-alive : active la session audio iOS → mode silencieux contourné
+  try{
+    if(iosAudio.paused){
+      iosAudio.src = SILENT_WAV_URL;
+      iosAudio.loop = true;
+      iosAudio.volume = 0;
+      await iosAudio.play();
+    }
+  }catch(e){ console.warn('iosAudio.play:', e); }
+
+  stopSrc();
+  src=actx.createBufferSource(); src.buffer=playBuf;
+  src.playbackRate.value=1; src.connect(actx.destination);
+
+  const lo = viewStart / speed, hi = viewEnd / speed;
+  if(offset < viewStart) offset = viewStart;
+  if(offset >= viewEnd) offset = viewStart;  // hors région → retour début seulement si dépassement réel
+  const bufOffset = offset / speed;
+
+  src.loop = true;   // toujours en boucle native — c'est loop() qui gère l'arrêt
+  src.loopStart = lo;
+  src.loopEnd   = hi;
+
+  t0=actx.currentTime;
+  try{
+    src.start(0, bufOffset);
+  }catch(err){ console.error('start error:', err); return; }
+  playing=true; setIcon(true); ph.style.display='block';
+  src.onended=()=>{ if(playing){ stopAll(); } };
+  loop();
+}
+
+function pause(){
+  if(!playing) return;
+  clearTimeout(stopTimer);
+  offset = currentPlayPos;  // position exacte telle que vue par loop()
+  if(offset > viewEnd) offset = viewEnd;
+  if(offset < viewStart) offset = viewStart;
+  iosAudio.pause();
+  stopSrc();
+  playing=false; setIcon(false); cancelAnimationFrame(raf);
+}
+
+function stopAll(){
+  clearTimeout(stopTimer);
+  iosAudio.pause(); iosAudio.loop = false;
+  stopSrc();
+  playing=false; offset=viewStart; setIcon(false);
+  cancelAnimationFrame(raf);
+  if(drawn){
+    ph.style.display='block';
+    drawPlayhead(viewStart);
+    pf.style.width='0%'; pr.value=0;
+    td.textContent=fmt(viewStart)+' / '+fmt(viewEnd);
+  }
+}
+function stopSrc(){ if(src){src.onended=null;try{src.stop();}catch(e){}src.disconnect();src=null;} }
+function loop(){
+  if(!playing)return;
+  const winLen = viewEnd - viewStart;
+  let pos = offset + (actx.currentTime - t0) * speed;
+  if(looping && winLen>0){
+    while(pos >= viewEnd) pos -= winLen;
+  } else if(pos >= viewEnd){
+    // Fin naturelle sans boucle → curseur reste à la fin
+    currentPlayPos = viewEnd;
+    stopSrc();
+    iosAudio.pause();
+    playing=false; setIcon(false); cancelAnimationFrame(raf);
+    offset = viewEnd;
+    if(drawn){
+      drawPlayhead(viewEnd);
+      pf.style.width='100%'; pr.value=1000;
+      td.textContent=fmt(viewEnd)+' / '+fmt(viewEnd);
+    }
+    return;
+  }
+  currentPlayPos = pos;
+  drawPlayhead(pos);
+  const r = winLen>0 ? (pos - viewStart)/winLen : 0;
+  pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+  td.textContent=fmt(pos)+' / '+fmt(viewEnd);
+  raf=requestAnimationFrame(loop);
+}
+// Place la tête de lecture (pos en temps réel) relativement à la fenêtre
+function drawPlayhead(pos){
+  if(!drawn) return;
+  const winLen = viewEnd - viewStart;
+  const r = winLen>0 ? (pos - viewStart)/winLen : 0;
+  ph.style.left = (Math.max(0,Math.min(1,r))*100)+'%';
+}
+
+// ── EVENTS ────────────────────────────────────────────────────────────────
+pb.addEventListener('click',()=>{ if(!abuf)return; playing?pause():play(); });
+rwb.addEventListener('click',()=>{
+  if(!abuf) return;
+  const w=playing; if(w) pause();
+  offset=viewStart;
+  pf.style.width='0%'; pr.value=0; td.textContent=fmt(viewStart)+' / '+fmt(viewEnd);
+  drawPlayhead(viewStart);
+  if(w) play();
+});
+pr.addEventListener('input',e=>{
+  const r=e.target.value/1000, w=playing; if(w)pause();
+  offset=viewStart + r*(viewEnd-viewStart);
+  pf.style.width=(r*100)+'%'; td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+  drawPlayhead(offset); if(w)play();
+});
+document.querySelectorAll('.sb').forEach(b=>b.addEventListener('click',async()=>{
+  const w=playing;
+  if(w) pause();                       // ralentir relance depuis la position courante
+  speed=parseFloat(b.dataset.s);
+  document.querySelectorAll('.sb').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  if(w) await play();
+}));
+ptg.addEventListener('click',()=>{
+  showP=!showP; ptg.classList.toggle('on',showP);
+  if(!drawn) return;
+  if(stretchMode==='musique') drawCurveMusic(pc.height);
+  else drawCurve(pc.height);
+});
+ntg.addEventListener('click',()=>{
+  showNotes=!showNotes; ntg.classList.toggle('on',showNotes);
+  if(!drawn) return;
+  if(stretchMode==='musique') drawCurveMusic(pc.height);
+  else drawCurve(pc.height);
+});
+document.getElementById('modeOiseau').addEventListener('click',async()=>{
+  if(stretchMode==='oiseau') return;
+  stretchMode='oiseau'; MFREQ=12000; FMIN_LOG=80;
+  pmin.value=1000; pmax.value=8000;
+  document.getElementById('lblPitch').textContent='Pitch';
+  document.getElementById('modeOiseau').classList.add('on');
+  document.getElementById('modeVoix').classList.remove('on');
+  document.getElementById('modeMusique').classList.remove('on');
+  showNotes=true; ntg.classList.add('on');
+  clearStretchCache();
+  if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
+});
+document.getElementById('modeVoix').addEventListener('click',async()=>{
+  if(stretchMode==='voix') return;
+  stretchMode='voix'; MFREQ=8000; FMIN_LOG=80;
+  pmin.value=80; pmax.value=1100;
+  document.getElementById('lblPitch').textContent='Pitch';
+  document.getElementById('modeVoix').classList.add('on');
+  document.getElementById('modeOiseau').classList.remove('on');
+  document.getElementById('modeMusique').classList.remove('on');
+  showNotes=false; ntg.classList.remove('on');
+  clearStretchCache();
+  if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
+});
+document.getElementById('modeMusique').addEventListener('click',async()=>{
+  if(stretchMode==='musique') return;
+  stretchMode='musique';
+  pmin.value=80; pmax.value=1200;
+  FMIN_LOG=80; MFREQ=1200;
+  document.getElementById('lblPitch').textContent='Axe Hz';
+  document.getElementById('modeMusique').classList.add('on');
+  document.getElementById('modeOiseau').classList.remove('on');
+  document.getElementById('modeVoix').classList.remove('on');
+  showNotes=true; ntg.classList.add('on');
+  showP=true; ptg.classList.add('on');
+  clearStretchCache();
+  if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
+});
+// Recalcul automatique quand les champs pitch min/max changent
+function applyScaleFromPitch(){
+  if(stretchMode==='musique'){
+    FMIN_LOG = Math.max(20, parseInt(pmin.value)||80);
+    MFREQ    = Math.min(20000, parseInt(pmax.value)||8000);
+  }
+}
+[pmin,pmax].forEach(el=>el.addEventListener('change',async()=>{
+  if(!abuf||!drawn) return;
+  applyScaleFromPitch();
+  const w=playing; if(w) pause();
+  await analyze(busy);
+  if(w) play();
+}));
+
+// ── SÉLECTION PAR GLISSEMENT (zoom sur région) ──────────────────────────────
+const viz = sc.parentElement;
+function evX(e){
+  const rect = viz.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  return Math.max(0, Math.min(rect.width, cx)) / rect.width;  // 0..1 dans la fenêtre
+}
+function xToTime(r){ return viewStart + r*(viewEnd-viewStart); }
+
+function selStart(e){
+  if(!drawn) return;
+  if(e.target && e.target.closest && e.target.closest('#zoomBadge')) return;
+
+  // Un doigt sur le curseur → drag de position
+  if(e.target && e.target.closest && e.target.closest('#ph')){
+    draggingPH=true;
+    draggingPHWasPlaying=playing;
+    if(playing) pause();
+    e.preventDefault(); return;
+  }
+
+  // Long press → mode glissement (déclenché après 400ms d'immobilité)
+  const startX = e.touches ? e.touches[0].clientX : e.clientX;
+  const startY = e.touches ? e.touches[0].clientY : e.clientY;
+  slideTimer = setTimeout(()=>{
+    if(selecting){
+      selecting=false;
+      sel.style.display='none'; selrd.style.display='none';
+      sliding=true;
+      slideStartX=startX;
+      slideStartVS=viewStart; slideStartVE=viewEnd;
+      // Sauvegarder la courbe haute résolution pour l'utiliser pendant le glissement
+      slideCurveSnapshot = curve.slice();
+      slideVSSnapshot = viewStart;
+      slideVESnapshot = viewEnd;
+      // MIN_LEN fixe calculé une seule fois — stable pendant tout le glissement
+      const nonNull = curve.filter(p=>p).length;
+      slideMinLen = Math.max(1, Math.floor(nonNull / 20));
+      // Afficher immédiatement le spectrogramme basse résolution
+      drawSpecFromFull(viewStart, viewEnd);
+      drawCurveFromFull(viewStart, viewEnd);
+      tlbl.innerHTML='<span style="position:absolute;left:0;right:0;text-align:center;color:var(--acc);font-size:10px">← Glisser →</span>';
+      sc.style.outline='2px solid rgba(126,207,110,.5)';
+    }
+  }, 400);
+
+  selecting=true; selX0=evX(e); selX1=selX0;
+  sel.style.display='block'; selrd.style.display='block';
+  updateSelUI();
+  e.preventDefault();
+}
+function selMove(e){
+  if(sliding){
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const rect = viz.getBoundingClientRect();
+    const dx = (slideStartX - cx) / rect.width;  // déplacement relatif
+    const winLen = slideStartVE - slideStartVS;
+    let ns = slideStartVS + dx * winLen;
+    let ne = slideStartVE + dx * winLen;
+    if(ns<0){ ne-=ns; ns=0; }
+    if(ne>dur){ ns-=(ne-dur); ne=dur; }
+    viewStart=Math.max(0,ns); viewEnd=Math.min(dur,ne);
+    // Redessiner depuis specFull en temps réel
+    drawSpecFromFull(viewStart, viewEnd);
+    drawCurveFromFull(viewStart, viewEnd);
+    setZoomBadge(true);
+    e.preventDefault(); return;
+  }
+  if(draggingPH){
+    const r=evX(e);
+    offset=xToTime(r);
+    offset=Math.max(viewStart, Math.min(viewEnd, offset));
+    const winLen=viewEnd-viewStart;
+    const rr=winLen>0?(offset-viewStart)/winLen:0;
+    pf.style.width=(rr*100)+'%'; pr.value=Math.round(rr*1000);
+    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    drawPlayhead(offset);
+    e.preventDefault(); return;
+  }
+  if(!selecting) return;
+  // Si on bouge avant 400ms, annuler le long press → c'est une sélection normale
+  if(slideTimer){ clearTimeout(slideTimer); slideTimer=null; }
+  selX1=evX(e); updateSelUI(); e.preventDefault();
+}
+function selEnd(e){
+  clearTimeout(slideTimer); slideTimer=null;
+  if(sliding){
+    sliding=false;
+    sc.style.outline='';
+    const w=playing; if(w) pause();
+    ph.style.display='none';
+    clearStretchCache();
+    setZoomBadge(true);
+    analyze(busy).then(()=>{
+      timeLabels();
+      ph.style.display='block'; drawPlayhead(offset);
+      if(w) play();
+    });
+    e.preventDefault(); return;
+  }
+  if(draggingPH){
+    draggingPH=false;
+    if(draggingPHWasPlaying) play();
+    e.preventDefault(); return;
+  }
+  if(!selecting) return;
+  selecting=false;
+  const a=Math.min(selX0,selX1), b=Math.max(selX0,selX1);
+  sel.style.display='none'; selrd.style.display='none';
+  // Ignorer les sélections trop petites (tap accidentel)
+  if(b-a < 0.02){ return; }
+  const t0s=xToTime(a), t1s=xToTime(b);
+  // Capturer la position courante AVANT la pause (pause() modifie offset)
+  const currentPos = playing
+    ? Math.min(viewEnd, Math.max(viewStart, currentPlayPos))
+    : offset;
+  const w=playing; if(w) pause();
+  viewStart=t0s; viewEnd=t1s;
+  offset = (currentPos >= t0s && currentPos < t1s) ? currentPos : t0s;
+  clearStretchCache();
+  setZoomBadge(true);
+  ph.style.display='none';
+  analyze(busy).then(()=>{
+    // Repositionner la tête au bon endroit après le redessin
+    const winLen = viewEnd - viewStart;
+    const r = winLen>0 ? (offset - viewStart)/winLen : 0;
+    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    ph.style.display='block';
+    drawPlayhead(offset);
+    if(w) play();
+  });
+}
+function setZoomBadge(on){
+  zoomBadge.classList.toggle('on', on);
+  viz.classList.toggle('zoomed', on);
+  if(on){ zoomTxt.textContent = fmt(viewStart)+' → '+fmt(viewEnd); updatePanButtons(); }
+}
+function updateSelUI(){
+  const a=Math.min(selX0,selX1), b=Math.max(selX0,selX1);
+  sel.style.left=(a*100)+'%'; sel.style.width=((b-a)*100)+'%';
+  selrd.textContent = fmt(xToTime(a))+' → '+fmt(xToTime(b));
+}
+viz.addEventListener('touchstart', selStart, {passive:false});
+viz.addEventListener('touchmove',  selMove,  {passive:false});
+viz.addEventListener('touchend',   selEnd);
+viz.addEventListener('mousedown',  selStart);
+window.addEventListener('mousemove',selMove);
+window.addEventListener('mouseup',  selEnd);
+zoomExit.addEventListener('click', e=>{ e.stopPropagation(); exitZoom(); });
+zoomExit.addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); exitZoom(); });
+
+function updatePanButtons(){
+  const pl=document.getElementById('panLeft');
+  const pr=document.getElementById('panRight');
+  if(!pl||!pr) return;
+  pl.disabled = viewStart <= 0;
+  pr.disabled = viewEnd >= dur;
+}
+
+function zoomOutStep(){
+  if(!abuf) return;
+  const FACTOR = 1.5;
+  const center = (viewStart + viewEnd) / 2;
+  const newHalf = (viewEnd - viewStart) * FACTOR / 2;
+  let ns = center - newHalf;
+  let ne = center + newHalf;
+  // Limiter aux bornes du fichier
+  if(ns < 0){ ne = Math.min(dur, ne - ns); ns = 0; }
+  if(ne > dur){ ns = Math.max(0, ns - (ne - dur)); ne = dur; }
+  viewStart = Math.max(0, ns);
+  viewEnd   = Math.min(dur, ne);
+  // Si on couvre tout le fichier → quitter le zoom
+  if(viewStart <= 0 && viewEnd >= dur){ exitZoom(); return; }
+  setZoomBadge(true);
+  updatePanButtons();
+  const w=playing; if(w) pause();
+  ph.style.display='none';
+  clearStretchCache();
+  analyze(busy).then(()=>{
+    const winLen=viewEnd-viewStart;
+    const r=winLen>0?(offset-viewStart)/winLen:0;
+    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    ph.style.display='block'; drawPlayhead(offset);
+    if(w) play();
+  });
+}
+
+function panView(dir){
+  if(!abuf) return;
+  const winLen = viewEnd - viewStart;
+  const step = winLen * 0.5;
+  let ns = viewStart + dir*step;
+  let ne = viewEnd   + dir*step;
+  if(ns < 0){ ne -= ns; ns = 0; }
+  if(ne > dur){ ns -= (ne-dur); ne = dur; }
+  viewStart = Math.max(0,ns); viewEnd = Math.min(dur,ne);
+  setZoomBadge(true);
+  updatePanButtons();
+  const w=playing; if(w) pause();
+  ph.style.display='none';
+  clearStretchCache();
+  analyze(busy).then(()=>{
+    // Recadrer offset dans la nouvelle fenêtre
+    if(offset < viewStart) offset = viewStart;
+    if(offset > viewEnd)   offset = viewEnd;
+    const winLen = viewEnd - viewStart;
+    const r = winLen>0 ? (offset-viewStart)/winLen : 0;
+    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    ph.style.display='block'; drawPlayhead(offset);
+    if(w)play();
+  });
+}
+document.getElementById('panLeft').addEventListener('click',  e=>{ e.stopPropagation(); panView(-1); });
+document.getElementById('panLeft').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); panView(-1); });
+document.getElementById('panRight').addEventListener('click',  e=>{ e.stopPropagation(); panView(1); });
+document.getElementById('panRight').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); panView(1); });
+document.getElementById('zoomOut').addEventListener('click',  e=>{ e.stopPropagation(); zoomOutStep(); });
+document.getElementById('zoomOut').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); zoomOutStep(); });
+
+// ── BOUTONS RÉGION ──────────────────────────────────────────────────────────
+loopBtn.addEventListener('click',()=>{
+  looping=!looping; loopBtn.classList.toggle('on',looping);
+  if(playing && !looping){
+    // Recalibrer offset/t0 avec la position exacte actuelle
+    // pour éviter que loop() détecte une fausse fin de région
+    offset = currentPlayPos;
+    t0 = actx.currentTime;
+  }
+});
+function exitZoom(){
+  if(!abuf) return;
+  const winLen = viewEnd - viewStart;
+  let currentPos;
+  if(playing){
+    // currentPlayPos est maintenu à jour par loop() — position exacte même en boucle
+    currentPos = Math.min(viewEnd, Math.max(viewStart, currentPlayPos));
+  } else { currentPos = offset; }
+  const w=playing; if(w) pause();
+  viewStart=0; viewEnd=dur;
+  offset = currentPos;
+  setZoomBadge(false);
+  clearStretchCache();
+  ph.style.display='none';
+  analyze(busy).then(()=>{
+    const winLen = viewEnd - viewStart;
+    const r = winLen>0 ? (offset - viewStart)/winLen : 0;
+    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
+    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
+    ph.style.display='block';
+    drawPlayhead(offset);
+    if(w) play();
+  });
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────
+// ── CLAVIER DE PIANO ────────────────────────────────────────────────────────
+// Séquence de touches à partir de F3, 2 octaves jusqu'à F5
+// Chaque entrée : {midi, black}
+(function buildPiano(){
+  const WW=28, BW=18, BH=50, WH=80;  // largeurs/hauteurs touches
+  const container=document.getElementById('pianoKeys');
+
+  // Construire la liste des notes F3..F5 (25 notes, 2 octaves + 1)
+  const START=53; // F3
+  const notes=[];
+  for(let i=0;i<=24;i++){
+    const midi=START+i;
+    const pos=midi%12;
+    const isBlack=[1,3,6,8,10].includes(pos);
+    notes.push({midi,isBlack,pos});
+  }
+
+  // Compter les touches blanches pour dimensionner le conteneur
+  const whites=notes.filter(n=>!n.isBlack);
+  const totalW=whites.length*WW;
+  container.style.width=totalW+'px';
+
+  // Créer les touches blanches positionnées
+  const whiteEls={};
+  whites.forEach((n,wi)=>{
+    const k=document.createElement('div');
+    k.className='pk-w';
+    k.style.left=(wi*WW)+'px';
+    k.style.width=WW+'px';
+    k.style.height=WH+'px';
+    k.dataset.midi=n.midi;
+    // Étiquette sur le Fa
+    if(n.pos===5){
+      const lbl=document.createElement('div');
+      lbl.className='pk-label';
+      lbl.textContent='F'+(Math.floor(n.midi/12)-1);
+      k.appendChild(lbl);
+    }
+    k.addEventListener('touchstart',e=>{e.preventDefault();pianoPress(n.midi,k);},{passive:false});
+    k.addEventListener('touchend',  e=>{e.preventDefault();pianoRelease(n.midi,k);},{passive:false});
+    k.addEventListener('mousedown', ()=>pianoPress(n.midi,k));
+    k.addEventListener('mouseup',   ()=>pianoRelease(n.midi,k));
+    container.appendChild(k);
+    whiteEls[n.midi]=wi;
+  });
+
+  // Créer les touches noires positionnées entre les blanches
+  notes.filter(n=>n.isBlack).forEach(n=>{
+    // La touche noire est entre la blanche précédente et la suivante
+    const prevWhiteIdx=whiteEls[n.midi-1];
+    if(prevWhiteIdx===undefined) return;
+    const k=document.createElement('div');
+    k.className='pk-b';
+    // Centrer sur le bord droit de la blanche précédente
+    const left=(prevWhiteIdx+1)*WW - BW/2;
+    k.style.left=left+'px';
+    k.style.width=BW+'px';
+    k.style.height=BH+'px';
+    k.dataset.midi=n.midi;
+    k.addEventListener('touchstart',e=>{e.preventDefault();pianoPress(n.midi,k);},{passive:false});
+    k.addEventListener('touchend',  e=>{e.preventDefault();pianoRelease(n.midi,k);},{passive:false});
+    k.addEventListener('mousedown', ()=>pianoPress(n.midi,k));
+    k.addEventListener('mouseup',   ()=>pianoRelease(n.midi,k));
+    container.appendChild(k);
+  });
+})();
+
+function playPianoNote(midi){
+  if(!actx) actx=new(window.AudioContext||window.webkitAudioContext)();
+  const freq=440*Math.pow(2,(midi-69)/12);
+  const now=actx.currentTime;
+  const master=actx.createGain(); master.gain.value=0.4; master.connect(actx.destination);
+  [1,2,3].forEach((h,i)=>{
+    const osc=actx.createOscillator(), g=actx.createGain();
+    osc.frequency.value=freq*h; osc.type='sine';
+    g.gain.setValueAtTime(0,now);
+    g.gain.linearRampToValueAtTime([0.6,0.25,0.1][i],now+0.01);
+    g.gain.exponentialRampToValueAtTime(0.001,now+2.5);
+    osc.connect(g); g.connect(master); osc.start(now); osc.stop(now+2.5);
+  });
+}
+
+function pianoPress(midi,el){
+  playPianoNote(midi); el.classList.add('active');
+  // Surbrillance : même note toutes octaves
+  if(curve.length && showP){
+    const noteClass=midi%12;
+    const ctx=pc.getContext('2d'), W=pc.width, H=pc.height;
+    if(stretchMode==='musique') drawCurveMusic(H); else drawCurve(H);
+    ctx.fillStyle='rgba(240,200,74,.35)';
+    for(const p of curve){
+      if(!p) continue;
+      const n=hzToNote(p.hz);
+      if(n && n.midi%12===noteClass){ const x=p.t*W; ctx.fillRect(x-1.5,0,3,H); }
+    }
+  }
+}
+
+function pianoRelease(midi,el){
+  el.classList.remove('active');
+  if(drawn){ if(stretchMode==='musique') drawCurveMusic(pc.height); else drawCurve(pc.height); }
+}
+
 function setOv(on,txt,pct){ ov.classList.toggle('on',on); if(txt!==undefined)ot.textContent=txt; if(pct!==undefined)ob.style.width=pct+'%'; }
 function tick(ms){ return new Promise(r=>setTimeout(r,ms||0)); }
+function fmt(s){ s=Math.max(0,s||0); return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'); }
+function setIcon(p){ pi.innerHTML=p?'<rect x="3" y="2" width="4" height="12"/><rect x="9" y="2" width="4" height="12"/>':'<polygon points="4,2 14,8 4,14"/>'; }
 
-ptg.addEventListener('click', ()=>{ showP=!showP; ptg.classList.toggle('on',showP); drawPlayhead(currentPlayPos); });
-ntg.addEventListener('click', ()=>{ showNotes=!showNotes; ntg.classList.toggle('on',showNotes); drawPlayhead(currentPlayPos); });
-[pmin,pmax].forEach(i=>i.addEventListener('change', ()=>{ if(abuf){ makeCurve(); drawPlayhead(currentPlayPos); } }));
+// (Removed global touchend preventDefault — it was swallowing button clicks.
+//  Zoom is already disabled via user-scalable=no in the viewport meta tag.)
 </script>
 </body>
 </html>

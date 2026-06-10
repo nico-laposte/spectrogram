@@ -169,6 +169,7 @@ let MFREQ = 8000;  // fréquence max du spectrogramme — change selon le mode
 
 let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
 let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
+let resizeIgnore=false;  // vrai pendant analyze() pour bloquer le ResizeObserver
 let currentPlayPos=0;  // position réelle mise à jour à chaque frame par loop()
 let curve=[], spec=null;
 let curveFull=[];  // courbe de pitch haute résolution sur tout le fichier
@@ -283,12 +284,16 @@ function fail(file){
 // ── ANALYSE ───────────────────────────────────────────────────────────────
 async function analyze(job){
   drawn=false;
+  resizeIgnore = true;   // empêche le ResizeObserver de re-déclencher analyze pendant le calcul
   setOv(true,'Analyse…',30);
   await tick(30);
 
   const W = sc.parentElement.clientWidth||320;
   const H = sc.parentElement.clientHeight||200;
   sc.width=W; sc.height=H; pc.width=W; pc.height=H;
+  // Hint GPU : sc ne sera lu qu'en putImageData (jamais getImageData), pc en clearRect + arc
+  sc.getContext('2d', {willReadFrequently: false});
+  pc.getContext('2d', {willReadFrequently: false});
 
   const sr   = abuf.sampleRate;
   const data = monoMix(abuf);
@@ -307,7 +312,7 @@ async function analyze(job){
 
   const STEP=12;
   for(let ci=0; ci<cols; ci+=STEP){
-    if(job!==busy) return setOv(false);
+    if(job!==busy){ resizeIgnore=false; return setOv(false); }
     const end=Math.min(ci+STEP,cols);
     for(let c=ci;c<end;c++){
       const start=vs + Math.floor(c/cols*(span-FFTN));
@@ -318,7 +323,7 @@ async function analyze(job){
     setOv(true,'Analyse…', 30+Math.round(ci/cols*65));
     await tick(1);
   }
-  if(job!==busy) return setOv(false);
+  if(job!==busy){ resizeIgnore=false; return setOv(false); }
 
   spec={out,cols,maxBin,gMax};
   try{
@@ -329,6 +334,7 @@ async function analyze(job){
     timeLabels();
   }catch(err){ console.error('draw error:', err); }
   drawn=true;
+  resizeIgnore = false;   // re-autoriser le ResizeObserver
   if(!playing){
     ph.style.display='block';
     drawPlayhead(offset);
@@ -517,9 +523,13 @@ function labelHeldNotesMusic(ctx,W,H,yOf){
         const x=midT*W, baseY=yOf(avgHz)-16;
         const w=ctx.measureText(pts[i].label).width;
         let y=baseY;
-        // Anti-collision simple
-        for(const p of placed){
-          if(Math.abs(p.x-x)<w+4 && Math.abs(p.y-y)<12) y-=13;
+        // Anti-collision : vérifier tous les labels déjà placés
+        let changed=true;
+        while(changed){
+          changed=false;
+          for(const p of placed){
+            if(Math.abs(p.x-x)<w+6 && Math.abs(p.y-y)<12){ y-=13; changed=true; break; }
+          }
         }
         if(y<2) y=yOf(avgHz)+5;
         placed.push({x,y});
@@ -573,8 +583,9 @@ function drawCurve(H){
 
 // Détecte les plateaux de hauteur stables et y pose une étiquette de note,
 // en évitant les superpositions (espacement minimal en pixels).
-function labelHeldNotes(ctx,W,H,yOf){
-  const MIN_LEN = window._overrideMinLen !== undefined ? window._overrideMinLen : 5;
+// minLen : nombre minimum de frames consécutives pour qu'un plateau soit étiqueté.
+function labelHeldNotes(ctx,W,H,yOf, minLen){
+  minLen = (minLen !== undefined) ? minLen : 5;
   ctx.font='600 9px "DM Mono", monospace';
   ctx.textBaseline='middle';
   ctx.textAlign='center';
@@ -591,7 +602,7 @@ function labelHeldNotes(ctx,W,H,yOf){
       if(!nj || nj.midi!==n0.midi) break;
       sumHz+=curve[j].hz; cnt++; j++;
     }
-    if(cnt>=MIN_LEN){
+    if(cnt>=minLen){
       const midT=(curve[i].t+curve[j-1].t)/2;
       const avgHz=sumHz/cnt;
       labels.push({x:midT*W, y:yOf(avgHz), lab:hzToNote(avgHz).label});
@@ -665,8 +676,32 @@ function drawCurveFromFull(vs, ve){
   if(winLen<=0 || snapLen<=0) return;
   const yOf=hz=>hzToY(hz,H);
 
-  // La courbe snapshot couvre [slideVSSnapshot, slideVESnapshot] en proportion t∈[0,1]
-  // On la remonte en temps absolu, puis on la projette sur la nouvelle fenêtre [vs, ve]
+  // En mode musique on utilise curveMusic (multi-voix), sinon curve (mono-voix)
+  if(stretchMode === 'musique'){
+    // Projeter les frames visibles de curveMusic sur la nouvelle fenêtre
+    ctx.fillStyle='rgba(255,80,80,.9)';
+    const visible = [];
+    for(const frame of curveMusic){
+      const tAbs = slideVSSnapshot + frame.t * snapLen;
+      if(tAbs < vs || tAbs > ve) continue;
+      const x = (tAbs - vs) / winLen * W;
+      for(const n of frame.notes){
+        const y = yOf(n.hz);
+        ctx.beginPath(); ctx.arc(x,y,1.8,0,6.283); ctx.fill();
+      }
+      visible.push({t:(tAbs-vs)/winLen, notes:frame.notes});
+    }
+    if(showNotes && visible.length >= 2){
+      const savedCM = curveMusic;
+      curveMusic = visible;
+      try{ labelHeldNotesMusic(ctx,W,H,yOf); }catch(e){}
+      curveMusic = savedCM;
+    }
+    ctx.fillStyle='rgba(255,80,80,.9)';
+    return;
+  }
+
+  // Mode oiseau / voix — courbe mono-voix depuis snapshot
   ctx.fillStyle='rgba(255,80,80,.9)';
   const visible=[];
   for(const p of slideCurveSnapshot){
@@ -684,11 +719,8 @@ function drawCurveFromFull(vs, ve){
   if(showNotes && visible.length >= 2){
     const savedCurve = curve;
     curve = visible;
-    const savedML = window._overrideMinLen;
-    window._overrideMinLen = slideMinLen;  // valeur fixe, stable pendant le glissement
-    try { labelHeldNotes(ctx, W, H, yOf); } catch(e){}
+    try { labelHeldNotes(ctx, W, H, yOf, slideMinLen); } catch(e){}
     curve = savedCurve;
-    window._overrideMinLen = savedML;
   }
   ctx.fillStyle='rgba(255,80,80,.9)';
 }
@@ -814,7 +846,7 @@ function autoDetectMode(){
     document.getElementById('modeVoix').classList.remove('on');
     document.getElementById('modeMusique').classList.remove('on');
   } else {
-    MFREQ=8000; pmin.value=80; pmax.value=1100;
+    MFREQ=8000; FMIN_LOG=80; pmin.value=80; pmax.value=1100;
     showNotes=false; ntg.classList.remove('on');
     document.getElementById('modeVoix').classList.add('on');
     document.getElementById('modeOiseau').classList.remove('on');
@@ -852,90 +884,8 @@ function timeStretchOLA(input, sr, factor){
 
 // Phase vocoder time stretch — meilleur sur la voix humaine.
 // Préserve la cohérence de phase entre trames successives.
-function timeStretchPV(input, sr, factor){
-  const N = input.length;
-  const fftSize = factor >= 3 ? 8192 : factor >= 2 ? 4096 : 2048;
-  const maxHop = Math.floor(fftSize * 0.75 / factor);  // garantit overlap suffisant
-  const hop = Math.min(fftSize >> 2, maxHop);
-  const synHop = Math.round(hop * factor);
-  const outLen = Math.ceil(N * factor) + fftSize;
-  const out = new Float32Array(outLen);
-  const winSum = new Float32Array(outLen);
-  // sqrt-Hann pour meilleure reconstruction
-  const w = new Float32Array(fftSize);
-  for(let i=0;i<fftSize;i++) w[i]=Math.sqrt(0.5-0.5*Math.cos(2*Math.PI*i/(fftSize-1)));
-
-  const phaseAcc  = new Float32Array(fftSize/2);
-  const lastPhase = new Float32Array(fftSize/2);
-  const TWO_PI = 2*Math.PI;
-
-  let anaPos=0, synPos=0;
-  const totalFrames = Math.ceil((N-fftSize)/hop)||1;
-  let frameCount=0;
-
-  while(anaPos + fftSize < N){
-    const re = new Float32Array(fftSize);
-    const im = new Float32Array(fftSize);
-    for(let i=0;i<fftSize;i++) re[i]=(input[Math.floor(anaPos)+i]||0)*w[i];
-    fftInPlace(re, im);
-
-    // Magnitudes et phases
-    const mag   = new Float32Array(fftSize/2);
-    const phase = new Float32Array(fftSize/2);
-    for(let k=0;k<fftSize/2;k++){
-      mag[k]  =Math.sqrt(re[k]*re[k]+im[k]*im[k]);
-      phase[k]=Math.atan2(im[k],re[k]);
-    }
-
-    // Identity phase locking : détecter les pics
-    const isPeak = new Uint8Array(fftSize/2);
-    for(let k=1;k<fftSize/2-1;k++){
-      if(mag[k]>mag[k-1]&&mag[k]>mag[k+1]) isPeak[k]=1;
-    }
-
-    // 1) Propager la phase des pics
-    for(let k=0;k<fftSize/2;k++){
-      if(!isPeak[k]) continue;
-      let dPhase=phase[k]-lastPhase[k]-(TWO_PI*k*hop/fftSize);
-      dPhase-=TWO_PI*Math.round(dPhase/TWO_PI);
-      phaseAcc[k]+=synHop*(TWO_PI*k/fftSize+dPhase/hop);
-    }
-
-    // 2) Bins voisins : phase relative au pic le plus proche — O(N) deux passes
-    const nearestPeak=new Int32Array(fftSize/2).fill(-1);
-    let last=-1;
-    for(let k=0;k<fftSize/2;k++){if(isPeak[k])last=k; if(last>=0)nearestPeak[k]=last;}
-    last=-1;
-    for(let k=fftSize/2-1;k>=0;k--){
-      if(isPeak[k])last=k;
-      if(last>=0&&(nearestPeak[k]<0||Math.abs(last-k)<Math.abs(nearestPeak[k]-k)))nearestPeak[k]=last;
-    }
-    const newRe=new Float32Array(fftSize);
-    const newIm=new Float32Array(fftSize);
-    for(let k=0;k<fftSize/2;k++){
-      const p=nearestPeak[k];
-      const accPhase=isPeak[k]?phaseAcc[k]:(p>=0?phaseAcc[p]+(phase[k]-phase[p]):phaseAcc[k]);
-      lastPhase[k]=phase[k];
-      newRe[k]=mag[k]*Math.cos(accPhase);
-      newIm[k]=mag[k]*Math.sin(accPhase);
-      if(k>0&&k<fftSize/2){newRe[fftSize-k]=newRe[k];newIm[fftSize-k]=-newIm[k];}
-    }
-
-    ifftInPlace(newRe, newIm);
-    for(let i=0;i<fftSize;i++){
-      out[synPos+i]    +=newRe[i]*w[i];
-      winSum[synPos+i] +=w[i]*w[i];
-    }
-    anaPos+=hop; synPos+=synHop;
-    frameCount++;
-    if(frameCount%30===0) ob.style.width=Math.min(95,Math.round(frameCount/totalFrames*100))+'%';
-  }
-
-  for(let i=0;i<outLen;i++){if(winSum[i]>1e-6) out[i]/=winSum[i];}
-  const buf=actx.createBuffer(1,outLen,sr);
-  buf.getChannelData(0).set(out);
-  return buf;
-}
+// Note : l'implémentation complète se trouve dans WORKER_CODE (thread Worker)
+// et dans timeStretchSyncAsync (fallback thread principal). Pas de doublon ici.
 
 // FFT en place (Cooley-Tukey radix-2)
 function fftInPlace(re, im){
@@ -1117,9 +1067,12 @@ self.onmessage=function(e){
   if(mode==='voix'){
     result=timeStretchPV(input,factor);
   } else if(mode==='musique'){
-    result=wsola(input,factor,{frameSize:2048,overlap:0.75,searchRadius:factor>=3?256:512});
+    // frameSize=4096 pour une meilleure résolution temporelle sur la musique polyphonique
+    // searchRadius=512 fixe — pas de réduction aux forts facteurs (recommandation ChatGPT)
+    result=wsola(input,factor,{frameSize:4096,overlap:0.75,searchRadius:512});
   } else {
-    result=wsola(input,factor,{frameSize:1024,overlap:0.75,searchRadius:factor>=3?64:128});
+    // mode oiseau : searchRadius=128 fixe pour une corrélation plus robuste
+    result=wsola(input,factor,{frameSize:1024,overlap:0.75,searchRadius:128});
   }
   postMessage({type:'done',samples:result.buffer},[result.buffer]);
 };
@@ -1133,7 +1086,11 @@ function getStretchWorker(){
   if(!stretchWorker){
     try{
       const blob=new Blob([WORKER_CODE],{type:'application/javascript'});
-      stretchWorker=new Worker(URL.createObjectURL(blob));
+      const blobUrl=URL.createObjectURL(blob);
+      stretchWorker=new Worker(blobUrl);
+      // Ne pas révoquer blobUrl ici — Safari révoque l'accès au script
+      // même après création du Worker, contrairement à Chrome.
+      // La fuite est négligeable (une seule URL, durée de vie = page).
     } catch(e){
       console.warn('Worker creation failed:', e);
       workerFailed=true;
@@ -1199,10 +1156,10 @@ function timeStretchSync(samples, mode, factor){
     for(let i=0;i<outLen;i++) if(winSum[i]>1e-6) out[i]/=winSum[i];
     return out;
   } else {
-    // WSOLA
+    // WSOLA — paramètres identiques au Worker
     const opts=mode==='musique'
-      ?{frameSize:2048,overlap:0.75,searchRadius:factor>=3?256:512}
-      :{frameSize:1024,overlap:0.75,searchRadius:factor>=3?64:128};
+      ?{frameSize:4096,overlap:0.75,searchRadius:512}   // musique : grande fenêtre, rayon fixe
+      :{frameSize:1024,overlap:0.75,searchRadius:128};   // oiseau : rayon fixe élargi
     const frameSize=opts.frameSize,overlap=opts.overlap,searchRadius=opts.searchRadius;
     const synthesisHop=Math.floor(frameSize*(1-overlap));
     const analysisHop=synthesisHop/factor;
@@ -1298,7 +1255,8 @@ async function timeStretchSyncAsync(samples, mode, factor){
 function clearStretchCache(){ stretchCache={}; }
 
 // Récupère (ou calcule) le buffer à jouer pour la vitesse demandée
-// Le calcul se fait dans un Worker → interface non bloquée
+// Le cache est limité à 3 entrées (LRU simple) pour éviter la fuite mémoire.
+const STRETCH_CACHE_MAX = 3;
 async function getPlayBuffer(spd, silent=false){
   if(!spd||isNaN(spd)||spd<=0) spd=1;
   if(Math.abs(spd-1)<0.001) return abuf;
@@ -1347,6 +1305,9 @@ async function getPlayBuffer(spd, silent=false){
   }
   const buf=actx.createBuffer(1,stretched.length,abuf.sampleRate);
   buf.getChannelData(0).set(stretched);
+  // LRU : si le cache dépasse la limite, supprimer l'entrée la plus ancienne
+  const keys=Object.keys(stretchCache);
+  if(keys.length >= STRETCH_CACHE_MAX) delete stretchCache[keys[0]];
   stretchCache[key]=buf;
   if(!silent) setOv(false);
   return buf;
@@ -1385,7 +1346,10 @@ async function ensureContext(){
 
 // iosAudio keep-alive : maintient la session audio iOS active (mode silencieux)
 // Joue un WAV silencieux court en boucle — aucun lien avec le contenu réel
-function makeSilentWavURL(){
+// Le Blob URL est conservé pour la durée de vie de l'app (réutilisé à chaque play).
+let SILENT_WAV_URL = null;
+function getSilentWavURL(){
+  if(SILENT_WAV_URL) return SILENT_WAV_URL;
   const sr=44100, dur=2, len=sr*dur;
   const buf=new ArrayBuffer(44+len*2);
   const v=new DataView(buf);
@@ -1396,9 +1360,9 @@ function makeSilentWavURL(){
   v.setUint32(28,sr*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
   w(36,'data'); v.setUint32(40,len*2,true);
   // données = zéros (silence)
-  return URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+  SILENT_WAV_URL = URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+  return SILENT_WAV_URL;
 }
-const SILENT_WAV_URL = makeSilentWavURL();
 
 async function play(){
   if(!abuf) return;
@@ -1415,7 +1379,7 @@ async function play(){
   // iosAudio keep-alive : active la session audio iOS → mode silencieux contourné
   try{
     if(iosAudio.paused){
-      iosAudio.src = SILENT_WAV_URL;
+      iosAudio.src = getSilentWavURL();
       iosAudio.loop = true;
       iosAudio.volume = 0;
       await iosAudio.play();
@@ -1450,14 +1414,14 @@ function pause(){
   offset = currentPlayPos;  // position exacte telle que vue par loop()
   if(offset > viewEnd) offset = viewEnd;
   if(offset < viewStart) offset = viewStart;
-  iosAudio.pause();
+  if(!iosAudio.paused) iosAudio.pause();
   stopSrc();
   playing=false; setIcon(false); cancelAnimationFrame(raf);
 }
 
 function stopAll(){
   clearTimeout(stopTimer);
-  iosAudio.pause(); iosAudio.loop = false;
+  if(!iosAudio.paused){ iosAudio.pause(); iosAudio.loop = false; }
   stopSrc();
   playing=false; offset=viewStart; setIcon(false);
   cancelAnimationFrame(raf);
@@ -1686,7 +1650,9 @@ function selEnd(e){
     ph.style.display='none';
     clearStretchCache();
     setZoomBadge(true);
-    analyze(busy).then(()=>{
+    const job=busy;
+    analyze(job).then(()=>{
+      if(job!==busy) return;
       timeLabels();
       ph.style.display='block'; drawPlayhead(offset);
       if(w) play();
@@ -1704,18 +1670,20 @@ function selEnd(e){
   sel.style.display='none'; selrd.style.display='none';
   // Ignorer les sélections trop petites (tap accidentel)
   if(b-a < 0.02){ return; }
-  const t0s=xToTime(a), t1s=xToTime(b);
+  const zoomT0=xToTime(a), zoomT1=xToTime(b);
   // Capturer la position courante AVANT la pause (pause() modifie offset)
   const currentPos = playing
     ? Math.min(viewEnd, Math.max(viewStart, currentPlayPos))
     : offset;
   const w=playing; if(w) pause();
-  viewStart=t0s; viewEnd=t1s;
-  offset = (currentPos >= t0s && currentPos < t1s) ? currentPos : t0s;
+  viewStart=zoomT0; viewEnd=zoomT1;
+  offset = (currentPos >= zoomT0 && currentPos < zoomT1) ? currentPos : zoomT0;
   clearStretchCache();
   setZoomBadge(true);
   ph.style.display='none';
-  analyze(busy).then(()=>{
+  const job=busy;
+  analyze(job).then(()=>{
+    if(job!==busy) return;
     // Repositionner la tête au bon endroit après le redessin
     const winLen = viewEnd - viewStart;
     const r = winLen>0 ? (offset - viewStart)/winLen : 0;
@@ -1736,6 +1704,22 @@ function updateSelUI(){
   sel.style.left=(a*100)+'%'; sel.style.width=((b-a)*100)+'%';
   selrd.textContent = fmt(xToTime(a))+' → '+fmt(xToTime(b));
 }
+// ── RESIZE OBSERVER ────────────────────────────────────────────────────────
+// Redessine si la taille du conteneur change (rotation, multitâche, redimensionnement).
+// IMPORTANT : on ignore les events déclenchés par le resize des canvas eux-mêmes
+// (qui se produisent pendant analyze()) pour éviter la boucle infinie busy++.
+let resizeTimeout = null;
+let resizeIgnore = false;  // vrai pendant analyze() pour absorber les faux events
+const vizResizeObserver = new ResizeObserver(() => {
+  if(resizeIgnore) return;
+  clearTimeout(resizeTimeout);
+  resizeTimeout = setTimeout(() => {
+    if(abuf && drawn && !playing){
+      analyze(busy).catch(e => console.warn('resize redraw:', e));
+    }
+  }, 300);
+});
+vizResizeObserver.observe(viz);
 viz.addEventListener('touchstart', selStart, {passive:false});
 viz.addEventListener('touchmove',  selMove,  {passive:false});
 viz.addEventListener('touchend',   selEnd);
@@ -1772,7 +1756,9 @@ function zoomOutStep(){
   const w=playing; if(w) pause();
   ph.style.display='none';
   clearStretchCache();
-  analyze(busy).then(()=>{
+  const job=busy;
+  analyze(job).then(()=>{
+    if(job!==busy) return;
     const winLen=viewEnd-viewStart;
     const r=winLen>0?(offset-viewStart)/winLen:0;
     pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
@@ -1796,7 +1782,9 @@ function panView(dir){
   const w=playing; if(w) pause();
   ph.style.display='none';
   clearStretchCache();
-  analyze(busy).then(()=>{
+  const job=busy;
+  analyze(job).then(()=>{
+    if(job!==busy) return;
     // Recadrer offset dans la nouvelle fenêtre
     if(offset < viewStart) offset = viewStart;
     if(offset > viewEnd)   offset = viewEnd;
@@ -1839,7 +1827,9 @@ function exitZoom(){
   setZoomBadge(false);
   clearStretchCache();
   ph.style.display='none';
-  analyze(busy).then(()=>{
+  const job=busy;
+  analyze(job).then(()=>{
+    if(job!==busy) return;
     const winLen = viewEnd - viewStart;
     const r = winLen>0 ? (offset - viewStart)/winLen : 0;
     pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);

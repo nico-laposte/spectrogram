@@ -1981,6 +1981,13 @@ let pianoOsc = null;
 function playPianoNote(midi){
   if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
   actx.resume();
+  // Débloquer le mode silencieux iOS — même mécanisme que play()
+  if(iosAudio.paused){
+    iosAudio.src = SILENT_WAV_URL;
+    iosAudio.loop = true;
+    iosAudio.volume = 0;
+    iosAudio.play().catch(()=>{});
+  }
   try{
     const b=actx.createBuffer(1,1,actx.sampleRate);
     const s=actx.createBufferSource(); s.buffer=b; s.connect(actx.destination); s.start(0);

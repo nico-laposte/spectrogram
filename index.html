@@ -13,17 +13,17 @@
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{background:var(--bg);color:var(--txt);font-family:'DM Mono',monospace;height:100%;overflow:hidden;overscroll-behavior:none}
 .app{display:flex;flex-direction:column;height:100dvh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
-header{padding:14px 20px 10px;border-bottom:1px solid var(--bdr);display:flex;align-items:baseline;gap:12px;flex-shrink:0}
+header{padding:14px 20px 10px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;gap:12px;flex-shrink:0}
 header h1{font-family:'Cormorant Garamond',serif;font-style:italic;font-weight:300;font-size:22px;color:var(--acc)}
-header span{font-size:10px;color:var(--mut);letter-spacing:.12em;text-transform:uppercase}
-.iz{flex-shrink:0;margin:12px 16px 0;border:1px dashed var(--bdr);border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px;position:relative;overflow:hidden}
+header .sub-title{font-size:10px;color:var(--mut);letter-spacing:.12em;text-transform:uppercase;flex:1}
+.iz{position:relative;display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px dashed var(--bdr);border-radius:8px;cursor:pointer;flex-shrink:0;max-width:160px;overflow:hidden}
 .iz.has{border-color:var(--acc);border-style:solid}
-.iz input{position:absolute;inset:0;opacity:0;width:100%;height:100%}
-.icn{width:32px;height:32px;flex-shrink:0;fill:none;stroke:var(--acc);stroke-width:1.5}
-.lbl{font-size:12px}.sub{font-size:10px;color:var(--mut);margin-top:2px}
+.iz input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
+.icn{width:16px;height:16px;flex-shrink:0;fill:none;stroke:var(--acc);stroke-width:1.8}
+.lbl{font-size:10px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
 .tip{display:none;margin:6px 16px 0;font-size:10px;color:var(--mut);line-height:1.6;padding:10px 12px;background:var(--surf);border-radius:8px;border:1px solid var(--bdr)}
 .tip strong{color:var(--acc2)}
-.viz{flex:1;margin:12px 16px;position:relative;border-radius:10px;overflow:hidden;background:var(--surf);border:1px solid var(--bdr);min-height:0}
+.viz{flex:1;margin:8px 16px;position:relative;border-radius:10px;overflow:hidden;background:var(--surf);border:1px solid var(--bdr);min-height:0}
 canvas{position:absolute;inset:0;width:100%;height:100%}
 #pc{pointer-events:none}
 .em{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--mut);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
@@ -77,22 +77,33 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 .pl.on{background:rgba(240,200,74,.3)}
 .pl::after{content:'';position:absolute;width:14px;height:14px;background:var(--mut);border-radius:50%;top:3px;left:3px;transition:transform .2s,background .2s}
 .pl.on::after{transform:translateX(16px);background:var(--acc2)}
+/* ── PIANO ───────────────────────────────────────────────────────────────── */
+#pianoWrap{flex-shrink:0;padding:0 16px 10px;touch-action:none;user-select:none}
+#piano{position:relative;height:64px;width:100%}
+.pk{position:absolute;top:0;border-radius:0 0 4px 4px;cursor:pointer;transition:background .06s}
+.pk.w{background:#ffffff;border:1px solid #2a3e2a;z-index:1;height:100%}
+.pk.b{background:#111;border:1px solid #0a0f0a;z-index:2;height:62%;top:0}
+.pk.w.active{background:#a0a0a0}
+.pk.b.active{background:#555}
+.pk-lbl{position:absolute;bottom:4px;left:50%;transform:translateX(-50%);font-size:7px;color:#666;pointer-events:none;font-family:'DM Mono',monospace;white-space:nowrap}
+#hc{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}
 </style>
 </head>
 <body>
 <div class="app">
-  <header><h1>Merle</h1><span>analyse sonore</span></header>
-
-  <div class="iz" id="iz">
-    <svg class="icn" viewBox="0 0 32 32"><path d="M16 4v16M10 14l6 6 6-6M6 22v4a2 2 0 002 2h16a2 2 0 002-2v-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <div><div class="lbl" id="ilbl">Importer un fichier audio</div><div class="sub">mp3 · m4a · wav · aac</div></div>
-    <input type="file" id="fi" accept="audio/*,video/*,.mov,.mp4,.m4a,.mp3,.wav,.aac">
-  </div>
+  <header>
+    <h1>Merle</h1><span class="sub-title">analyse sonore</span>
+    <div class="iz" id="iz">
+      <svg class="icn" viewBox="0 0 32 32"><path d="M16 4v16M10 14l6 6 6-6M6 22v4a2 2 0 002 2h16a2 2 0 002-2v-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="lbl" id="ilbl">Importer</span>
+      <input type="file" id="fi" accept="audio/*,video/*,.mov,.mp4,.m4a,.mp3,.wav,.aac">
+    </div>
+  </header>
   <audio id="iosAudio" playsinline preload="auto" style="display:none"></audio>
   <div class="tip" id="tip"></div>
 
   <div class="viz">
-    <canvas id="sc"></canvas><canvas id="pc"></canvas>
+    <canvas id="sc"></canvas><canvas id="pc"></canvas><canvas id="hc"></canvas>
     <div id="sel"></div>
     <div id="ph"></div>
     <div class="fl" id="flbl"></div>
@@ -128,46 +139,55 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
           <path d="M13,10 Q13,13 10,13 L1,13"/>
         </svg>
       </button>
+      <button id="settingsBtn" class="trsp-btn" title="Réglages">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <circle cx="7" cy="7" r="2"/><line x1="7" y1="1" x2="7" y2="3"/><line x1="7" y1="11" x2="7" y2="13"/><line x1="1" y1="7" x2="3" y2="7"/><line x1="11" y1="7" x2="13" y2="7"/><line x1="2.9" y1="2.9" x2="4.3" y2="4.3"/><line x1="9.7" y1="9.7" x2="11.1" y2="11.1"/><line x1="11.1" y1="2.9" x2="9.7" y2="4.3"/><line x1="4.3" y1="9.7" x2="2.9" y2="11.1"/>
+        </svg>
+      </button>
     </div>
-    <div class="row">
-      <div class="rl">Vitesse</div>
-      <div class="sbs">
-        <button class="sb" data-s="0.25">×0.25</button><button class="sb" data-s="0.5">×0.5</button>
-        <button class="sb" data-s="0.75">×0.75</button><button class="sb on" data-s="1">×1</button>
+    <div id="settingsPanel" style="display:none;flex-direction:column;gap:10px">
+      <div class="row">
+        <div class="rl">Vitesse</div>
+        <div class="sbs">
+          <button class="sb" data-s="0.25">×0.25</button><button class="sb" data-s="0.5">×0.5</button>
+          <button class="sb" data-s="0.75">×0.75</button><button class="sb on" data-s="1">×1</button>
+        </div>
+      </div>
+      <div class="row" id="rowPitch">
+        <div class="rl" id="lblPitch">Pitch</div>
+        <div class="fic">
+          <label>min</label><input type="number" id="pmin" value="1000" min="100" max="10000" step="100" onfocus="this.select()">
+          <span style="color:var(--mut)">–</span>
+          <label>max</label><input type="number" id="pmax" value="8000" min="100" max="12000" step="100" onfocus="this.select()">
+          <span style="color:var(--mut);font-size:9px">Hz</span>
+        </div>
+      </div>
+      <div class="row">
+        <div class="rl">Courbe</div><div class="dot"></div>
+        <button class="pl on" id="ptg"></button>
+        <div class="rl" style="min-width:0;margin-left:14px">Notes</div>
+        <button class="pl on" id="ntg"></button>
+      </div>
+      <div class="row">
+        <div class="rl">Mode</div>
+        <div class="sbs" id="modeSbs">
+          <button class="mdb on" id="modeOiseau">🐦 Oiseau</button>
+          <button class="mdb" id="modeVoix">🎤 Voix</button>
+          <button class="mdb" id="modeMusique">🎵 Musique</button>
+        </div>
       </div>
     </div>
-    <div class="row" id="rowPitch">
-      <div class="rl" id="lblPitch">Pitch</div>
-      <div class="fic">
-        <label>min</label><input type="number" id="pmin" value="1000" min="100" max="10000" step="100" onfocus="this.select()">
-        <span style="color:var(--mut)">–</span>
-        <label>max</label><input type="number" id="pmax" value="8000" min="100" max="12000" step="100" onfocus="this.select()">
-        <span style="color:var(--mut);font-size:9px">Hz</span>
-      </div>
-    </div>
-    <div class="row">
-      <div class="rl">Courbe</div><div class="dot"></div>
-      <button class="pl on" id="ptg"></button>
-      <div class="rl" style="min-width:0;margin-left:14px">Notes</div>
-      <button class="pl on" id="ntg"></button>
-    </div>
-    <div class="row">
-      <div class="rl">Mode</div>
-      <div class="sbs" id="modeSbs">
-        <button class="mdb on" id="modeOiseau">🐦 Oiseau</button>
-        <button class="mdb" id="modeVoix">🎤 Voix</button>
-        <button class="mdb" id="modeMusique">🎵 Musique</button>
-      </div>
-    </div>
-
   </div>
-</div>
+  <div id="pianoWrap"><div id="piano"></div></div>
 
 <script>
 const FFTN = 2048, NCOLS = 600;
 let MFREQ = 8000;  // fréquence max du spectrogramme — change selon le mode
 
 let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
+
+// L'AudioContext est créé à la demande dans playPianoNote ou load()
+
 let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
 let currentPlayPos=0;  // position réelle mise à jour à chaque frame par loop()
 let curve=[], spec=null;
@@ -334,6 +354,7 @@ async function analyze(job){
     drawPlayhead(offset);
   }
   setOv(false);
+  if(typeof drawHighlight==='function') drawHighlight();
 }
 
 function monoMix(buf){
@@ -1532,6 +1553,15 @@ function drawPlayhead(pos){
 }
 
 // ── EVENTS ────────────────────────────────────────────────────────────────
+// ── TOGGLE RÉGLAGES ───────────────────────────────────────────────────────
+const settingsBtn = $('settingsBtn');
+const settingsPanel = $('settingsPanel');
+settingsBtn.addEventListener('click', () => {
+  const open = settingsPanel.style.display === 'flex';
+  settingsPanel.style.display = open ? 'none' : 'flex';
+  settingsBtn.classList.toggle('on', !open);
+});
+
 pb.addEventListener('click',()=>{ if(!abuf)return; playing?pause():play(); });
 rwb.addEventListener('click',()=>{
   if(!abuf) return;
@@ -1895,6 +1925,142 @@ function setIcon(p){ pi.innerHTML=p?'<rect x="3" y="2" width="4" height="12"/><r
 
 // (Removed global touchend preventDefault — it was swallowing button clicks.
 //  Zoom is already disabled via user-scalable=no in the viewport meta tag.)
+
+// ── PIANO ─────────────────────────────────────────────────────────────────
+// 2 octaves de F3 à E5 : MIDI 53 → 88 (inclus)
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const BLACK_CHROMA = new Set([1,3,6,8,10]); // C#,D#,F#,G#,A#
+const PIANO_START = 53; // F3
+const PIANO_END   = 76; // E5 (2 octaves exactes)
+const PIANO_MIDI  = [];
+for(let m=PIANO_START; m<=PIANO_END; m++) PIANO_MIDI.push(m);
+
+// Construire le clavier dans #piano
+(function buildPiano(){
+  const wrap = document.getElementById('piano');
+  const whites = PIANO_MIDI.filter(m=>!BLACK_CHROMA.has(m%12));
+  const totalW = whites.length;
+  const wPct = 100/totalW;
+  const whiteIdx = {};
+  let wi=0;
+  for(const m of PIANO_MIDI){
+    if(!BLACK_CHROMA.has(m%12)){ whiteIdx[m]=wi; wi++; }
+  }
+  for(const m of PIANO_MIDI){
+    const isBlack = BLACK_CHROMA.has(m%12);
+    const btn = document.createElement('button');
+    btn.className = 'pk ' + (isBlack ? 'b' : 'w');
+    btn.dataset.midi   = m;
+    btn.dataset.chroma = m%12;
+    if(!isBlack){
+      const idx = whiteIdx[m];
+      btn.style.left  = (idx*wPct)+'%';
+      btn.style.width = wPct+'%';
+      // Label sur les do
+      if(m%12===0){
+        const oct = Math.floor(m/12)-1;
+        const lbl = document.createElement('span');
+        lbl.className='pk-lbl';
+        lbl.textContent='C'+oct;
+        btn.appendChild(lbl);
+      }
+    } else {
+      let prevWhite = m-1;
+      while(prevWhite>=PIANO_START && BLACK_CHROMA.has(prevWhite%12)) prevWhite--;
+      const idx = whiteIdx[prevWhite] ?? 0;
+      btn.style.left  = ((idx+1)*wPct - wPct*0.3)+'%';
+      btn.style.width = (wPct*0.6)+'%';
+    }
+    wrap.appendChild(btn);
+  }
+})();
+
+// ── Son piano via AudioContext + oscillateur ─────────────────────────────
+let pianoOsc = null;
+
+function playPianoNote(midi){
+  if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
+  actx.resume();
+  try{
+    const b=actx.createBuffer(1,1,actx.sampleRate);
+    const s=actx.createBufferSource(); s.buffer=b; s.connect(actx.destination); s.start(0);
+  }catch(e){}
+  if(pianoOsc){ try{ pianoOsc.stop(); }catch(e){} pianoOsc=null; }
+  const hz=440*Math.pow(2,(midi-69)/12);
+  const when=(actx.currentTime||0)+0.05;
+  const osc=actx.createOscillator(), env=actx.createGain();
+  osc.type='sine'; osc.frequency.value=hz;
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(0.4, when+0.01);
+  env.gain.exponentialRampToValueAtTime(0.001, when+1.2);
+  osc.connect(env); env.connect(actx.destination);
+  osc.start(when);
+  osc.stop(when+1.3);
+  pianoOsc=osc;
+}
+let pianoNote = null;  // chroma actif (0-11) ou null
+
+// ── Canvas highlight ───────────────────────────────────────────────────────
+const hc = document.getElementById('hc');
+
+function drawHighlight(){
+  hc.width=sc.width; hc.height=sc.height;
+  const W=hc.width, H=hc.height;
+  const ctx=hc.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  if(pianoNote===null || !drawn) return;
+  ctx.fillStyle='rgba(240,200,74,.5)';
+  if(stretchMode==='musique'){
+    for(const frame of curveMusic){
+      for(const n of frame.notes){
+        if(((n.midi%12)+12)%12===pianoNote){
+          ctx.beginPath(); ctx.arc(frame.t*W, hzToY(n.hz,H), 5,0,6.283); ctx.fill();
+        }
+      }
+    }
+  } else {
+    for(const p of curve){
+      if(!p) continue;
+      const note=hzToNote(p.hz);
+      if(note && ((note.midi%12)+12)%12===pianoNote){
+        ctx.beginPath(); ctx.arc(p.t*W, hzToY(p.hz,H), 5,0,6.283); ctx.fill();
+      }
+    }
+  }
+}
+
+function highlightNote(chroma, pressedEl){
+  pianoNote=chroma;
+  drawHighlight();
+  document.querySelectorAll('.pk').forEach(k=> k.classList.remove('active'));
+  if(pressedEl) pressedEl.classList.add('active');
+}
+
+// ── Interactions piano ─────────────────────────────────────────────────────
+const pianoEl = document.getElementById('piano');
+
+function pianoPress(e){
+  e.preventDefault();
+  const t=e.touches ? e.changedTouches[0] : e;
+  const target=document.elementFromPoint(t.clientX, t.clientY);
+  const el=target && target.closest('.pk');
+  if(!el) return;
+  const chroma=parseInt(el.dataset.chroma);
+  const midi=parseInt(el.dataset.midi);
+  highlightNote(chroma, el);
+  playPianoNote(midi);
+}
+
+function pianoRelease(e){
+  highlightNote(null, null);
+}
+
+pianoEl.addEventListener('mousedown',  pianoPress);
+pianoEl.addEventListener('mouseup',    pianoRelease);
+pianoEl.addEventListener('mouseleave', pianoRelease);
+pianoEl.addEventListener('touchstart', pianoPress,   {passive:false});
+pianoEl.addEventListener('touchend',   pianoRelease, {passive:false});
+pianoEl.addEventListener('touchcancel',pianoRelease, {passive:false});
 </script>
 </body>
 </html>

@@ -666,20 +666,22 @@ function makeCurveMusic(){
 function drawCurveMusic(H){
   const ctx=pc.getContext('2d'), W=pc.width;
   ctx.clearRect(0,0,W,H);
-  if(!showP||!curveMusic.length) return;
+  if(!curveMusic.length) return;
   const yOf=hz=>hzToY(hz,H);
 
-  // Dessiner les points (rouge comme la courbe mono-voix)
-  ctx.fillStyle='rgba(255,80,80,.95)';
-  for(const frame of curveMusic){
-    const x=frame.t*W;
-    for(const n of frame.notes){
-      const y=yOf(n.hz);
-      ctx.beginPath(); ctx.arc(x,y,1.8,0,6.283); ctx.fill();
+  // Points de la courbe — respecte showP
+  if(showP){
+    ctx.fillStyle='rgba(255,80,80,.95)';
+    for(const frame of curveMusic){
+      const x=frame.t*W;
+      for(const n of frame.notes){
+        const y=yOf(n.hz);
+        ctx.beginPath(); ctx.arc(x,y,1.8,0,6.283); ctx.fill();
+      }
     }
   }
 
-  // Étiquettes des notes tenues
+  // Étiquettes des notes tenues — respecte showNotes indépendamment
   if(showNotes) labelHeldNotesMusic(ctx,W,H,yOf);
 }
 

@@ -2287,9 +2287,9 @@ function playPianoNote(midi){
     return osc;
   }
 
-  pianoOsc  = makeVoice(hz,       0.45);  // fondamentale
-  pianoOsc2 = makeVoice(hz*2,     0.18);  // 2e harmonique
-  pianoOsc3 = makeVoice(hz*3,     0.08);  // 3e harmonique
+  pianoOsc  = makeVoice(hz,       0.20);  // fondamentale
+  pianoOsc2 = makeVoice(hz*2,     0.08);  // 2e harmonique
+  pianoOsc3 = makeVoice(hz*3,     0.04);  // 3e harmonique
 }
 let pianoNote = null;  // chroma actif (0-11) ou null
 

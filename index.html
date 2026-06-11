@@ -595,48 +595,71 @@ function makeCurve(){
 let curveMusic = [];  // tableau de tableaux : curveMusic[col] = [{hz, midi}, ...]
 
 function makeCurveMusic(){
-  const {out,cols,maxBin,gMax}=spec;
+  // Utiliser FFTN=4096 pour une meilleure résolution dans les graves
+  // (bin = sr/4096 ≈ 10.8Hz à 44100Hz, suffisant pour distinguer C3/C#3)
+  const FFTN_M = 4096;
+  const sr = abuf.sampleRate;
+  const data = monoMix(abuf);
+  const total = data.length;
+  const win = hann(FFTN_M);
+  const bins = FFTN_M / 2;
+  const maxBinM = Math.min(bins - 1, Math.floor(MFREQ / (sr/2) * bins));
+
+  const {cols} = spec;
+  const vs = Math.floor(viewStart * sr);
+  const ve = Math.min(total, Math.floor(viewEnd * sr));
+  const span = Math.max(FFTN_M + 1, ve - vs);
+
   const MAX_VOICES = 6;
   const HARM_TOL   = 0.015;
   const gMaxRef = (specFull && specFull.gMaxHi) ? specFull.gMaxHi : spec.gMax;
-  const THRESH  = gMaxRef * 0.03;
-  // Plage musique : 80-4200 Hz
-  const b1=Math.floor(80/MFREQ*maxBin), b2=Math.ceil(4200/MFREQ*maxBin);
+  const THRESH  = gMaxRef * 0.02;
+  const b1 = Math.floor(80   / MFREQ * maxBinM);
+  const b2 = Math.ceil(4200  / MFREQ * maxBinM);
 
-  curveMusic=[];
-  for(let c=0;c<cols;c++){
-    const off=c*maxBin;
+  curveMusic = [];
+  for(let c = 0; c < cols; c++){
+    const start = vs + Math.floor(c / cols * (span - FFTN_M));
+    const mag = fftMag(data, start, FFTN_M, win, maxBinM);
 
-    // 1) Trouver tous les pics locaux dans la plage
-    const peaks=[];
-    for(let b=b1+1;b<Math.min(b2,maxBin-1);b++){
-      const v=out[off+b];
-      if(v>THRESH && v>out[off+b-1] && v>out[off+b+1]){
-        peaks.push({b, hz:b/maxBin*MFREQ, v});
+    // 1) Trouver tous les pics locaux avec interpolation de Quinn (optimisée Hann)
+    const peaks = [];
+    for(let b = b1+1; b < Math.min(b2, maxBinM-1); b++){
+      const v = mag[b];
+      if(v > THRESH && v > mag[b-1] && v > mag[b+1]){
+        // Interpolation de Quinn : correction sub-bin bornée à ±0.5
+        // Plus précise que la parabole simple pour les fenêtres de Hann
+        const alpha = mag[b-1] / v;
+        const beta  = mag[b+1] / v;
+        // Formule de Quinn (approximation 1er ordre)
+        let offset = 0.5 * (beta - alpha) / (1 + alpha + beta);
+        // Borner l'offset pour éviter les valeurs aberrantes
+        offset = Math.max(-0.5, Math.min(0.5, offset));
+        const bFine = b + offset;
+        const hz = bFine / bins * (sr / 2);
+        peaks.push({b, hz, v});
       }
     }
-    // Trier par amplitude décroissante
-    peaks.sort((a,b)=>b.v-a.v);
+    peaks.sort((a,b) => b.v - a.v);
 
     // 2) Supprimer les harmoniques
-    const fundamentals=[];
+    const fundamentals = [];
     for(const p of peaks){
-      let isHarmonic=false;
+      let isHarmonic = false;
       for(const f of fundamentals){
-        // Vérifier si p.hz est un multiple entier de f.hz
-        const ratio=p.hz/f.hz;
-        const nearest=Math.round(ratio);
-        if(nearest>=2 && nearest<=8 && Math.abs(ratio-nearest)/nearest < HARM_TOL){
-          isHarmonic=true; break;
+        const ratio = p.hz / f.hz;
+        const nearest = Math.round(ratio);
+        if(nearest >= 2 && nearest <= 8 && Math.abs(ratio - nearest) / nearest < HARM_TOL){
+          isHarmonic = true; break;
         }
       }
       if(!isHarmonic){
-        const n=hzToNote(p.hz);
-        if(n) fundamentals.push({hz:p.hz, midi:n.midi, label:n.label});
-        if(fundamentals.length>=MAX_VOICES) break;
+        const n = hzToNote(p.hz);
+        if(n) fundamentals.push({hz: p.hz, midi: n.midi, label: n.label});
+        if(fundamentals.length >= MAX_VOICES) break;
       }
     }
-    curveMusic.push({t:c/cols, notes:fundamentals});
+    curveMusic.push({t: c/cols, notes: fundamentals});
   }
 }
 

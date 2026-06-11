@@ -1756,9 +1756,8 @@ settingsBtn.addEventListener('click', async () => {
   settingsPanel.style.display = open ? 'none' : 'flex';
   settingsBtn.classList.toggle('on', !open);
   if(abuf && drawn){
-    const w=playing; if(w) pause();
+    // Redessiner sans interrompre la lecture
     await analyze(busy);
-    if(w) play();
   }
 });
 

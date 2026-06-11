@@ -926,14 +926,15 @@ function drawSpecFromFull(vs, ve){
   const W=sc.width, H=sc.height;
   const ctx=sc.getContext('2d');
   const img=ctx.createImageData(W,H), px=img.data;
+  // specFull.maxBin couvre jusqu'à Nyquist — utiliser sr/2 pour le mapping
+  const nyquist = abuf.sampleRate / 2;
   for(let x=0; x<W; x++){
-    // position temporelle de ce pixel dans la fenêtre demandée
     const t = vs + (x/W) * (ve-vs);
     const ci = Math.min(Math.floor(t/totalDur * cols), cols-1);
     const off = ci * maxBin;
     for(let y=0; y<H; y++){
       const hz = yToHz(y, H);
-      const binF = hz/MFREQ*maxBin;
+      const binF = hz/nyquist*maxBin;
       const b0 = Math.min(Math.floor(binF), maxBin-1);
       const b1 = Math.min(b0+1, maxBin-1);
       const tf  = binF - b0;
@@ -1756,7 +1757,6 @@ settingsBtn.addEventListener('click', async () => {
   settingsPanel.style.display = open ? 'none' : 'flex';
   settingsBtn.classList.toggle('on', !open);
   if(abuf && drawn){
-    // Redessiner sans interrompre la lecture
     await analyze(busy);
   }
 });
@@ -1826,9 +1826,7 @@ function setPitchAlgo(algo){
 const PITCH_CYCLE = ['peak','amdf','yin','multi'];
 async function applyScaleOrPitch(){
   if(!abuf||!drawn) return;
-  const w=playing; if(w) pause();
   await analyze(busy);
-  if(w) play();
 }
 $('scaleToggle').addEventListener('click',  async()=>{ setScaleLog(!logScale);     await applyScaleOrPitch(); });
 $('pitchToggle').addEventListener('click', async()=>{
@@ -1868,7 +1866,10 @@ document.getElementById('modeOiseau').addEventListener('click',async()=>{
   document.getElementById('modeMusique').classList.remove('on');
   showNotes=true; ntg.classList.add('on');
   setAlgo('wsola-oiseau');
-  if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
+  if(abuf){
+    if(speed < 1){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
+    await analyze(busy);
+  }
 });
 document.getElementById('modeVoix').addEventListener('click',async()=>{
   if(stretchMode==='voix') return;
@@ -1881,7 +1882,10 @@ document.getElementById('modeVoix').addEventListener('click',async()=>{
   document.getElementById('modeMusique').classList.remove('on');
   showNotes=false; ntg.classList.remove('on');
   setAlgo('pv');
-  if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
+  if(abuf){
+    if(speed < 1){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
+    await analyze(busy);
+  }
 });
 document.getElementById('modeMusique').addEventListener('click',async()=>{
   if(stretchMode==='musique') return;
@@ -1895,7 +1899,10 @@ document.getElementById('modeMusique').addEventListener('click',async()=>{
   showNotes=true; ntg.classList.add('on');
   showP=true; ptg.classList.add('on');
   setAlgo('wsola-musique');
-  if(abuf){ const w=playing; if(w)pause(); await analyze(busy); if(w)play(); }
+  if(abuf){
+    if(speed < 1){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
+    await analyze(busy);
+  }
 });
 // Recalcul automatique quand les champs pitch min/max changent
 function applyAxis(){
@@ -1905,16 +1912,12 @@ function applyAxis(){
 async function applyAndRedraw(){
   if(!abuf||!drawn) return;
   applyAxis();
-  const w=playing; if(w) pause();
   await analyze(busy);
-  if(w) play();
 }
 [ymin,ymax].forEach(el=>el.addEventListener('change', applyAndRedraw));
 [pmin,pmax].forEach(el=>el.addEventListener('change',async()=>{
   if(!abuf||!drawn) return;
-  const w=playing; if(w) pause();
   await analyze(busy);
-  if(w) play();
 }));
 
 // ── SÉLECTION PAR GLISSEMENT (zoom sur région) ──────────────────────────────

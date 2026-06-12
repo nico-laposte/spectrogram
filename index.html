@@ -202,7 +202,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
   <div id="pianoWrap" style="display:none"><div id="piano"></div></div>
 
 <script>
-const FFTN = 2048, NCOLS = 600;
+const FFTN = 4096, NCOLS = 600;
 let MFREQ = 8000;  // fréquence max du spectrogramme — change selon le mode
 
 let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
@@ -2205,7 +2205,7 @@ function setIcon(p){ pi.innerHTML=p?'<rect x="3" y="2" width="4" height="12"/><r
 // 2 octaves de F3 à E5 : MIDI 53 → 88 (inclus)
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const BLACK_CHROMA = new Set([1,3,6,8,10]); // C#,D#,F#,G#,A#
-const PIANO_START = 57; // A3
+const PIANO_START = 55; // G3
 const PIANO_END   = 76; // E5
 const PIANO_MIDI  = [];
 for(let m=PIANO_START; m<=PIANO_END; m++) PIANO_MIDI.push(m);
@@ -2336,18 +2336,73 @@ function highlightNote(chroma, pressedEl){
 // ── Interactions piano ─────────────────────────────────────────────────────
 const pianoEl = document.getElementById('piano');
 
+function pianoKeyAtPoint(clientX, clientY){
+  const keys = pianoEl.querySelectorAll('.pk');
+  let best = null, bestDist = Infinity;
+  for(const k of keys){
+    const r = k.getBoundingClientRect();
+    if(clientX >= r.left-4 && clientX <= r.right+4 &&
+       clientY >= r.top-4  && clientY <= r.bottom+4){
+      const isBlack = k.classList.contains('b');
+      const cx = (r.left+r.right)/2, cy = (r.top+r.bottom)/2;
+      const dist = Math.hypot(clientX-cx, clientY-cy) - (isBlack ? 20 : 0);
+      if(dist < bestDist){ bestDist=dist; best=k; }
+    }
+  }
+  return best;
+}
+
+// Cache des positions des touches — recalculé à chaque touchstart
+// pour éviter getBoundingClientRect() en boucle pendant touchmove
+let _pianoKeyCache = null;
+function buildPianoCache(){
+  _pianoKeyCache = Array.from(pianoEl.querySelectorAll('.pk')).map(k=>({
+    el: k,
+    r: k.getBoundingClientRect(),
+    isBlack: k.classList.contains('b'),
+    midi: parseInt(k.dataset.midi),
+    chroma: parseInt(k.dataset.chroma),
+  }));
+}
+function pianoKeyFromCache(clientX, clientY){
+  if(!_pianoKeyCache) return null;
+  let best = null, bestDist = Infinity;
+  for(const k of _pianoKeyCache){
+    const r = k.r;
+    if(clientX >= r.left-4 && clientX <= r.right+4 &&
+       clientY >= r.top-4  && clientY <= r.bottom+4){
+      const cx = (r.left+r.right)/2, cy = (r.top+r.bottom)/2;
+      const dist = Math.hypot(clientX-cx, clientY-cy) - (k.isBlack ? 20 : 0);
+      if(dist < bestDist){ bestDist=dist; best=k; }
+    }
+  }
+  return best;
+}
+
 function pianoPress(e){
   if(!abuf) return;
   e.preventDefault();
+  buildPianoCache();
   const t=e.touches ? e.changedTouches[0] : e;
-  const target=document.elementFromPoint(t.clientX, t.clientY);
-  const el=target && target.closest('.pk');
-  if(!el) return;
-  const chroma=parseInt(el.dataset.chroma);
-  const midi=parseInt(el.dataset.midi);
-  _lastSlideMidi = midi;
-  highlightNote(chroma, el);
-  playPianoNote(midi);
+  const k = pianoKeyFromCache(t.clientX, t.clientY);
+  if(!k) return;
+  _lastSlideMidi = k.midi;
+  requestAnimationFrame(()=>{ highlightNote(k.chroma, k.el); });
+
+  // Débloquer iOS si nécessaire, puis jouer
+  if(iosAudio.paused){
+    iosAudio.src = SILENT_WAV_URL;
+    iosAudio.loop = true;
+    iosAudio.volume = 0;
+    const onPlay = ()=>{
+      iosAudio.removeEventListener('play', onPlay);
+      playPianoNote(k.midi);
+    };
+    iosAudio.addEventListener('play', onPlay);
+    iosAudio.play().catch(()=>{ playPianoNote(k.midi); });
+  } else {
+    playPianoNote(k.midi);
+  }
 }
 
 let _lastSlideMidi = null;
@@ -2356,20 +2411,17 @@ function pianoSlide(e){
   if(!abuf) return;
   e.preventDefault();
   const t=e.touches ? e.changedTouches[0] : e;
-  const target=document.elementFromPoint(t.clientX, t.clientY);
-  const el=target && target.closest('.pk');
-  if(!el) return;
-  const midi=parseInt(el.dataset.midi);
-  if(midi === _lastSlideMidi) return;  // même touche, ne pas rejouer
-  _lastSlideMidi = midi;
-  const chroma=parseInt(el.dataset.chroma);
-  highlightNote(chroma, el);
-  playPianoNote(midi);
+  const k = pianoKeyFromCache(t.clientX, t.clientY);
+  if(!k || k.midi === _lastSlideMidi) return;
+  _lastSlideMidi = k.midi;
+  playPianoNote(k.midi);
+  requestAnimationFrame(()=>{ highlightNote(k.chroma, k.el); });
 }
 
 function pianoRelease(e){
   _lastSlideMidi = null;
-  highlightNote(null, null);
+  // Maintenir la couleur au moins 120ms pour les taps brefs
+  setTimeout(()=>{ highlightNote(null, null); }, 120);
 }
 
 pianoEl.addEventListener('mousedown',  pianoPress);

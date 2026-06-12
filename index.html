@@ -642,20 +642,9 @@ function makeCurveMusic(){
     }
     peaks.sort((a,b) => b.v - a.v);
 
-    // 1b) Fusionner les pics trop proches (< 1.5 demi-tons) — garder le plus fort
-    const merged = [];
-    for(const p of peaks){
-      let tooClose = false;
-      for(const m of merged){
-        const semitones = Math.abs(12 * Math.log2(p.hz / m.hz));
-        if(semitones < 1.5){ tooClose = true; break; }
-      }
-      if(!tooClose) merged.push(p);
-    }
-
     // 2) Supprimer les harmoniques
     const fundamentals = [];
-    for(const p of merged){
+    for(const p of peaks){
       let isHarmonic = false;
       for(const f of fundamentals){
         const ratio = p.hz / f.hz;

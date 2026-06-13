@@ -40,7 +40,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 @keyframes s{to{transform:rotate(360deg)}}
 .ot{font-size:11px;color:var(--acc);letter-spacing:.1em;text-transform:uppercase}
 .ob{width:150px;height:3px;background:var(--bdr);border-radius:2px;overflow:hidden}
-.ob div{height:100%;width:0%;background:var(--acc);transition:width .12s}
+#ob{height:100%;width:0%;background:var(--acc);transition:width .12s}
 .ctrl{flex-shrink:0;padding:0 16px 12px;display:flex;flex-direction:column;gap:10px}
 .row{display:flex;align-items:center;gap:10px}
 .rl{font-size:9px;color:var(--mut);letter-spacing:.1em;text-transform:uppercase;min-width:40px;flex-shrink:0}
@@ -1163,7 +1163,7 @@ function timeStretchPV(input, sr, factor){
     }
     anaPos+=hop; synPos+=synHop;
     frameCount++;
-    if(frameCount%30===0) ob.style.width=Math.min(95,Math.round(frameCount/totalFrames*100))+'%';
+    if(frameCount%30===0) setOv(true, undefined, Math.min(95,Math.round(frameCount/totalFrames*100)));
   }
 
   for(let i=0;i<outLen;i++){if(winSum[i]>1e-6) out[i]/=winSum[i];}
@@ -1257,6 +1257,8 @@ function wsola(input,factor,options){
   const win=new Float32Array(frameSize);
   for(let i=0;i<frameSize;i++)win[i]=0.5-0.5*Math.cos(2*Math.PI*i/(frameSize-1));
   let inPos=0,outPos=0;
+  const totalFrames=Math.ceil((outputLength-frameSize)/synthesisHop)||1;
+  let frameCount=0;
   for(let i=0;i<frameSize;i++){output[i]+=(input[i]||0)*win[i];weight[i]+=win[i];}
   inPos+=analysisHop;outPos+=synthesisHop;
   while(outPos+frameSize<outputLength&&inPos+frameSize<input.length){
@@ -1283,6 +1285,8 @@ function wsola(input,factor,options){
       weight[outIndex]+=win[i];
     }
     inPos+=analysisHop;outPos+=synthesisHop;
+    frameCount++;
+    if(frameCount%30===0)postMessage({type:'progress',pct:Math.round(frameCount/totalFrames*100)});
   }
   for(let i=0;i<outputLength;i++)if(weight[i]>1e-12)output[i]/=weight[i];
   return output;
@@ -1526,7 +1530,7 @@ async function timeStretchSyncAsync(samples, mode, factor){
     for(let i=0;i<fftSize;i++){out[synPos+i]+=nRe[i]*w[i];winSum[synPos+i]+=w[i]*w[i];}
     anaPos+=hop; synPos+=synHop; frameCount++;
     if(frameCount%50===0){
-      ob.style.width=Math.min(95,Math.round(frameCount/totalFrames*100))+'%';
+      setOv(true, undefined, Math.min(95,Math.round(frameCount/totalFrames*100)));
       await tick(0);  // libérer le thread brièvement
     }
   }
@@ -1543,7 +1547,7 @@ async function getPlayBuffer(spd, silent=false){
   if(Math.abs(spd-1)<0.001) return abuf;
   const key=stretchMode+':'+stretchAlgo+':'+String(spd);
   if(stretchCache[key]) return stretchCache[key];
-  if(!silent){setOv(true,'Préparation ×'+spd+'…',5);await tick(20);}
+  if(!silent){setOv(true,'Préparation ×'+spd+'…',0);await tick(20);}
   const mono=monoMix(abuf);
   const factor=1/spd;
   // L'algo détermine le Worker et le mode passé au moteur
@@ -1561,8 +1565,8 @@ async function getPlayBuffer(spd, silent=false){
       const timeout=setTimeout(()=>{ reject(new Error('Worker timeout')); }, 30000);
       function onMsg(e){
         if(e.data.type==='progress'){
-          if(!silent) ob.style.width=e.data.pct+'%';
-        } else if(e.data.type==='done'){
+          if(!silent) setOv(true, undefined, e.data.pct);
+          } else if(e.data.type==='done'){
           clearTimeout(timeout);
           worker.removeEventListener('message',onMsg);
           worker.removeEventListener('error',onErr);
@@ -2193,7 +2197,13 @@ function exitZoom(){
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────────────
-function setOv(on,txt,pct){ ov.classList.toggle('on',on); if(txt!==undefined)ot.textContent=txt; if(pct!==undefined)ob.style.width=pct+'%'; }
+let _lastOvPct = 0;
+function setOv(on, txt, pct){
+  ov.classList.toggle('on', on);
+  if(txt !== undefined) ot.textContent = txt;
+  if(!on){ ob.style.width = '0%'; _lastOvPct = 0; return; }
+  if(pct !== undefined){ ob.style.width = pct + '%'; _lastOvPct = pct; }
+}
 function tick(ms){ return new Promise(r=>setTimeout(r,ms||0)); }
 function fmt(s){ s=Math.max(0,s||0); return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'); }
 function setIcon(p){ pi.innerHTML=p?'<rect x="3" y="2" width="4" height="12"/><rect x="9" y="2" width="4" height="12"/>':'<polygon points="4,2 14,8 4,14"/>'; }

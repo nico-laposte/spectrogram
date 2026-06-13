@@ -1548,6 +1548,7 @@ async function getPlayBuffer(spd, silent=false){
   const key=stretchMode+':'+stretchAlgo+':'+String(spd);
   if(stretchCache[key]) return stretchCache[key];
   if(!silent){
+    _lastOvPct = 0;
     setOv(true,'Préparation ×'+spd+'…',0);
     cancelBtn.style.display='block';
     await tick(20);
@@ -1562,6 +1563,7 @@ async function getPlayBuffer(spd, silent=false){
   const worker = stretchAlgo !== 'pv' ? getStretchWorker() : null;
 
   let _wasCancelled = false;
+  let stretched;
   if(worker){
     const samples=mono.slice();
     stretched = await new Promise((resolve,reject)=>{
@@ -1871,11 +1873,12 @@ function setAlgo(algo){
 }
 async function setAlgoAndReload(algo){
   setAlgo(algo);
-  if(abuf && speed < 1){
-    const w=playing; if(w) pause();
-    await getPlayBuffer(speed);
-    if(w) play();
+  if(!abuf) return;
+  const w=playing; if(w) pause();
+  if(speed < 1){
+    const buf = await getPlayBuffer(speed);
   }
+  if(w) play();
 }
 document.getElementById('algoWsolaOiseau').addEventListener('click', ()=> setAlgoAndReload('wsola-oiseau'));
 document.getElementById('algoWsolaVoix').addEventListener('click',   ()=> setAlgoAndReload('wsola-voix'));

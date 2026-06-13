@@ -1053,6 +1053,9 @@ function autoDetectMode(){
   }
 
   if(detectedMode === stretchMode){ _detectingMode=false; return; }
+  // Ne pas redéclencher analyze si le fichier vient d'être chargé (drawn=false)
+  // L'analyze initial de load() s'en chargera
+  _detectingMode = true;  // garder le flag actif pendant le click
   $('mode'+detectedMode.charAt(0).toUpperCase()+detectedMode.slice(1)).click();
   _detectingMode = false;
 }
@@ -1897,8 +1900,8 @@ document.getElementById('modeOiseau').addEventListener('click',async()=>{
   showNotes=true; ntg.classList.add('on');
   setAlgo('wsola-oiseau');
   if(abuf){
-    if(speed < 1){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
-    await analyze(busy);
+    if(speed < 1 && drawn){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
+    if(drawn) await analyze(busy);
   }
 });
 document.getElementById('modeVoix').addEventListener('click',async()=>{
@@ -1913,8 +1916,8 @@ document.getElementById('modeVoix').addEventListener('click',async()=>{
   showNotes=false; ntg.classList.remove('on');
   setAlgo('pv');
   if(abuf){
-    if(speed < 1){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
-    await analyze(busy);
+    if(speed < 1 && drawn){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
+    if(drawn) await analyze(busy);
   }
 });
 document.getElementById('modeMusique').addEventListener('click',async()=>{
@@ -1930,8 +1933,8 @@ document.getElementById('modeMusique').addEventListener('click',async()=>{
   showP=true; ptg.classList.add('on');
   setAlgo('wsola-musique');
   if(abuf){
-    if(speed < 1){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
-    await analyze(busy);
+    if(speed < 1 && drawn){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
+    if(drawn) await analyze(busy);
   }
 });
 // Recalcul automatique quand les champs pitch min/max changent

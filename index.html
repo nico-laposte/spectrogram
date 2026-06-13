@@ -169,6 +169,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
           <button class="mdb" id="algoWsolaVoix">WSOLA 🎤</button>
           <button class="mdb" id="algoWsolaMusique">WSOLA 🎵</button>
           <button class="mdb" id="algoPV">Phase vocoder</button>
+          <button id="stereoBtn" title="Mono/Stéréo" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:9px;cursor:pointer">Mono</button>
         </div>
       </div>
       <div class="row" id="rowAxis">
@@ -857,6 +858,7 @@ let stretchMode = 'oiseau';   // 'oiseau' | 'voix' | 'musique'
 let logScale  = false;        // true = axe Y logarithmique
 let multiPitch = false;       // true = détection multi-notes (mode musique)
 let stretchAlgo = 'wsola-oiseau';  // 'wsola-oiseau' | 'wsola-musique' | 'pv'
+let stereo = false;  // traitement stéréo du time-stretching
 
 
 // Calcule un spectrogramme basse résolution du fichier entier.
@@ -1548,7 +1550,7 @@ const STRETCH_CACHE_MAX = 3;
 async function getPlayBuffer(spd, silent=false){
   if(!spd||isNaN(spd)||spd<=0) spd=1;
   if(Math.abs(spd-1)<0.001) return abuf;
-  const key=stretchMode+':'+stretchAlgo+':'+String(spd);
+  const key=stretchMode+':'+stretchAlgo+':'+(stereo?'s':'m')+':'+String(spd);
   if(stretchCache[key]) return stretchCache[key];
   if(!silent){
     _lastOvPct = 0;
@@ -1556,58 +1558,74 @@ async function getPlayBuffer(spd, silent=false){
     cancelBtn.style.display='block';
     await tick(20);
   }
-  const mono=monoMix(abuf);
   const factor=1/spd;
-  // L'algo détermine le Worker et le mode passé au moteur
   const algoMode = stretchAlgo==='pv'           ? 'voix'
                  : stretchAlgo==='wsola-musique' ? 'musique'
                  : stretchAlgo==='wsola-voix'    ? 'wsola-voix'
                  : 'oiseau';
   const worker = stretchAlgo !== 'pv' ? getStretchWorker() : null;
 
-  let _wasCancelled = false;
-  let stretched;
-  if(worker){
-    const samples=mono.slice();
-    stretched = await new Promise((resolve,reject)=>{
-      const timeout=setTimeout(()=>{ reject(new Error('Worker timeout')); }, 30000);
-      _cancelReject = ()=>{ _wasCancelled=true; clearTimeout(timeout); reject(new Error('cancelled')); };
-      function onMsg(e){
-        if(e.data.type==='progress'){
-          if(!silent) setOv(true, undefined, e.data.pct);
-        } else if(e.data.type==='done'){
-          clearTimeout(timeout);
-          _cancelReject = null;
+  // Fonction qui étire un canal (Float32Array) via Worker ou fallback
+  async function stretchChannel(samples){
+    let _wasCancelled = false;
+    let result;
+    if(worker){
+      const s = samples.slice();
+      result = await new Promise((resolve,reject)=>{
+        const timeout=setTimeout(()=>{ reject(new Error('Worker timeout')); }, 30000);
+        _cancelReject = ()=>{ _wasCancelled=true; clearTimeout(timeout); reject(new Error('cancelled')); };
+        function onMsg(e){
+          if(e.data.type==='progress'){ if(!silent) setOv(true, undefined, e.data.pct); }
+          else if(e.data.type==='done'){
+            clearTimeout(timeout); _cancelReject=null;
+            worker.removeEventListener('message',onMsg);
+            worker.removeEventListener('error',onErr);
+            resolve(new Float32Array(e.data.samples));
+          }
+        }
+        function onErr(e){
+          clearTimeout(timeout); _cancelReject=null;
           worker.removeEventListener('message',onMsg);
           worker.removeEventListener('error',onErr);
-          resolve(new Float32Array(e.data.samples));
+          reject(e);
         }
-      }
-      function onErr(e){
-        clearTimeout(timeout);
-        _cancelReject = null;
-        worker.removeEventListener('message',onMsg);
-        worker.removeEventListener('error',onErr);
-        reject(e);
-      }
-      worker.addEventListener('message',onMsg);
-      worker.addEventListener('error',onErr);
-      worker.postMessage({mode:algoMode,factor,samples:samples.buffer},[samples.buffer]);
-    }).catch(err=>{
-      if(err.message === 'cancelled') return null;
-      console.warn('Worker failed, falling back to sync:', err);
-      stretchWorker=null; workerFailed=true;
-      return null;
-    });
+        worker.addEventListener('message',onMsg);
+        worker.addEventListener('error',onErr);
+        worker.postMessage({mode:algoMode,factor,samples:s.buffer},[s.buffer]);
+      }).catch(err=>{
+        if(err.message==='cancelled'){ _wasCancelled=true; return null; }
+        console.warn('Worker failed, falling back to sync:', err);
+        stretchWorker=null; workerFailed=true;
+        return null;
+      });
+    }
+    if(!result && !_wasCancelled){
+      result = await timeStretchSyncAsync(samples, algoMode, factor);
+    }
+    return result || null;
   }
 
-  // Fallback synchrone si Worker indisponible (pas si annulé)
-  if(!stretched && !_wasCancelled){
-    stretched = await timeStretchSyncAsync(mono, algoMode, factor);
+  let buf;
+  if(stereo && abuf.numberOfChannels >= 2){
+    const left  = new Float32Array(abuf.getChannelData(0));
+    const right = new Float32Array(abuf.getChannelData(1));
+    // Utiliser le fallback async pour les deux canaux — le Worker ne peut pas
+    // être appelé deux fois de suite avec des buffers transférés
+    const strL = await timeStretchSyncAsync(left,  algoMode, factor);
+    if(!strL){ cancelBtn.style.display='none'; if(!silent) setOv(false); return abuf; }
+    const strR = await timeStretchSyncAsync(right, algoMode, factor);
+    if(!strR){ cancelBtn.style.display='none'; if(!silent) setOv(false); return abuf; }
+    buf = actx.createBuffer(2, strL.length, abuf.sampleRate);
+    buf.getChannelData(0).set(strL);
+    buf.getChannelData(1).set(strR);
+  } else {
+    // Mono (comportement d'origine)
+    const mono = monoMix(abuf);
+    const stretched = await stretchChannel(mono);
+    if(!stretched){ cancelBtn.style.display='none'; if(!silent) setOv(false); return abuf; }
+    buf = actx.createBuffer(1, stretched.length, abuf.sampleRate);
+    buf.getChannelData(0).set(stretched);
   }
-  if(!stretched){ cancelBtn.style.display='none'; if(!silent) setOv(false); return abuf; }
-  const buf=actx.createBuffer(1,stretched.length,abuf.sampleRate);
-  buf.getChannelData(0).set(stretched);
   const keys=Object.keys(stretchCache);
   if(keys.length >= STRETCH_CACHE_MAX) delete stretchCache[keys[0]];
   stretchCache[key]=buf;
@@ -1876,13 +1894,23 @@ function setAlgo(algo){
 }
 async function setAlgoAndReload(algo){
   setAlgo(algo);
-  if(!abuf) return;
-  const w=playing; if(w) pause();
-  if(speed < 1){
-    const buf = await getPlayBuffer(speed);
-  }
-  if(w) play();
+  if(!abuf || speed >= 1 || !playing) return;
+  pause();
+  await getPlayBuffer(speed);
+  play();
 }
+const stereoBtn = $('stereoBtn');
+stereoBtn.addEventListener('click', async ()=>{
+  stereo = !stereo;
+  stereoBtn.textContent = stereo ? 'Stéréo' : 'Mono';
+  stereoBtn.style.borderColor = stereo ? 'var(--acc)' : 'var(--bdr)';
+  stereoBtn.style.color = stereo ? 'var(--acc)' : 'var(--mut)';
+  clearStretchCache();
+  if(!abuf || speed >= 1 || !playing) return;
+  pause();
+  await getPlayBuffer(speed);
+  play();
+});
 document.getElementById('algoWsolaOiseau').addEventListener('click', ()=> setAlgoAndReload('wsola-oiseau'));
 document.getElementById('algoWsolaVoix').addEventListener('click',   ()=> setAlgoAndReload('wsola-voix'));
 document.getElementById('algoWsolaMusique').addEventListener('click',()=> setAlgoAndReload('wsola-musique'));
@@ -1900,7 +1928,7 @@ document.getElementById('modeOiseau').addEventListener('click',async()=>{
   showNotes=true; ntg.classList.add('on');
   setAlgo('wsola-oiseau');
   if(abuf){
-    if(speed < 1 && drawn){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
+    if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }
     if(drawn) await analyze(busy);
   }
 });
@@ -1916,7 +1944,7 @@ document.getElementById('modeVoix').addEventListener('click',async()=>{
   showNotes=false; ntg.classList.remove('on');
   setAlgo('pv');
   if(abuf){
-    if(speed < 1 && drawn){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
+    if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }
     if(drawn) await analyze(busy);
   }
 });
@@ -1933,7 +1961,7 @@ document.getElementById('modeMusique').addEventListener('click',async()=>{
   showP=true; ptg.classList.add('on');
   setAlgo('wsola-musique');
   if(abuf){
-    if(speed < 1 && drawn){ const w=playing; if(w) pause(); await getPlayBuffer(speed); if(w) play(); }
+    if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }
     if(drawn) await analyze(busy);
   }
 });

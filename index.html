@@ -1483,64 +1483,108 @@ function timeStretchSync(samples, mode, factor){
   }
 }
 
-// Version async du PV voix — pause toutes les 50 trames pour ne pas bloquer l'UI
-async function timeStretchSyncAsync(samples, mode, factor){
-  if(mode !== 'voix') return timeStretchSync(samples, mode, factor);
-  const N=samples.length;
-  const fftSize=factor>=3?8192:factor>=2?4096:2048;
-  const maxHop=Math.floor(fftSize*0.75/factor);const hop=Math.min(fftSize>>2,maxHop);
-  const synHop=Math.round(hop*factor);
-  const outLen=Math.ceil(N*factor)+fftSize;
-  const out=new Float32Array(outLen);
-  const winSum=new Float32Array(outLen);
-  const w=new Float32Array(fftSize);
-  for(let i=0;i<fftSize;i++) w[i]=Math.sqrt(0.5-0.5*Math.cos(2*Math.PI*i/(fftSize-1)));
-  const phaseAcc=new Float32Array(fftSize/2);
-  const lastPhase=new Float32Array(fftSize/2);
-  const TWO_PI=2*Math.PI;
-  let anaPos=0, synPos=0, frameCount=0;
-  const totalFrames=Math.ceil((N-fftSize)/hop)||1;
-  while(anaPos+fftSize<N){
-    const re=new Float32Array(fftSize),im=new Float32Array(fftSize);
-    for(let i=0;i<fftSize;i++) re[i]=(samples[Math.floor(anaPos)+i]||0)*w[i];
-    fftInPlace(re,im);
-    const mag=new Float32Array(fftSize/2),phase=new Float32Array(fftSize/2);
-    for(let k=0;k<fftSize/2;k++){mag[k]=Math.sqrt(re[k]*re[k]+im[k]*im[k]);phase[k]=Math.atan2(im[k],re[k]);}
-    const isPeak=new Uint8Array(fftSize/2);
-    for(let k=1;k<fftSize/2-1;k++) if(mag[k]>mag[k-1]&&mag[k]>mag[k+1]) isPeak[k]=1;
-    for(let k=0;k<fftSize/2;k++){
-      if(!isPeak[k]) continue;
-      let dPhase=phase[k]-lastPhase[k]-(TWO_PI*k*hop/fftSize);
-      dPhase-=TWO_PI*Math.round(dPhase/TWO_PI);
-      phaseAcc[k]+=synHop*(TWO_PI*k/fftSize+dPhase/hop);
+// Version async — pause toutes les N frames pour ne pas bloquer l'UI
+async function timeStretchSyncAsync(samples, mode, factor, pctMin=0, pctMax=95){
+  if(mode === 'voix'){
+    // Phase vocoder async (déjà implémenté)
+    const N=samples.length;
+    const fftSize=factor>=3?8192:factor>=2?4096:2048;
+    const maxHop=Math.floor(fftSize*0.75/factor);const hop=Math.min(fftSize>>2,maxHop);
+    const synHop=Math.round(hop*factor);
+    const outLen=Math.ceil(N*factor)+fftSize;
+    const out=new Float32Array(outLen);
+    const winSum=new Float32Array(outLen);
+    const w=new Float32Array(fftSize);
+    for(let i=0;i<fftSize;i++) w[i]=Math.sqrt(0.5-0.5*Math.cos(2*Math.PI*i/(fftSize-1)));
+    const phaseAcc=new Float32Array(fftSize/2);
+    const lastPhase=new Float32Array(fftSize/2);
+    const TWO_PI=2*Math.PI;
+    let anaPos=0, synPos=0, frameCount=0;
+    const totalFrames=Math.ceil((N-fftSize)/hop)||1;
+    while(anaPos+fftSize<N){
+      const re=new Float32Array(fftSize),im=new Float32Array(fftSize);
+      for(let i=0;i<fftSize;i++) re[i]=(samples[Math.floor(anaPos)+i]||0)*w[i];
+      fftInPlace(re,im);
+      const mag=new Float32Array(fftSize/2),phase=new Float32Array(fftSize/2);
+      for(let k=0;k<fftSize/2;k++){mag[k]=Math.sqrt(re[k]*re[k]+im[k]*im[k]);phase[k]=Math.atan2(im[k],re[k]);}
+      const isPeak=new Uint8Array(fftSize/2);
+      for(let k=1;k<fftSize/2-1;k++) if(mag[k]>mag[k-1]&&mag[k]>mag[k+1]) isPeak[k]=1;
+      for(let k=0;k<fftSize/2;k++){
+        if(!isPeak[k]) continue;
+        let dPhase=phase[k]-lastPhase[k]-(TWO_PI*k*hop/fftSize);
+        dPhase-=TWO_PI*Math.round(dPhase/TWO_PI);
+        phaseAcc[k]+=synHop*(TWO_PI*k/fftSize+dPhase/hop);
+      }
+      const nearPeak=new Int32Array(fftSize/2).fill(-1);
+      let lp=-1;
+      for(let k=0;k<fftSize/2;k++){if(isPeak[k])lp=k;if(lp>=0)nearPeak[k]=lp;}
+      lp=-1;
+      for(let k=fftSize/2-1;k>=0;k--){
+        if(isPeak[k])lp=k;
+        if(lp>=0&&(nearPeak[k]<0||Math.abs(lp-k)<Math.abs(nearPeak[k]-k)))nearPeak[k]=lp;
+      }
+      const nRe=new Float32Array(fftSize),nIm=new Float32Array(fftSize);
+      for(let k=0;k<fftSize/2;k++){
+        let acc;
+        if(isPeak[k]){acc=phaseAcc[k];}
+        else{const p=nearPeak[k];acc=p>=0?phaseAcc[p]+(phase[k]-phase[p]):phaseAcc[k];}
+        lastPhase[k]=phase[k];
+        nRe[k]=mag[k]*Math.cos(acc);nIm[k]=mag[k]*Math.sin(acc);
+        if(k>0&&k<fftSize/2){nRe[fftSize-k]=nRe[k];nIm[fftSize-k]=-nIm[k];}
+      }
+      ifftInPlace(nRe,nIm);
+      for(let i=0;i<fftSize;i++){out[synPos+i]+=nRe[i]*w[i];winSum[synPos+i]+=w[i]*w[i];}
+      anaPos+=hop; synPos+=synHop; frameCount++;
+      if(frameCount%50===0){
+        setOv(true, undefined, Math.round(pctMin + (pctMax-pctMin)*frameCount/totalFrames));
+        await tick(0);
+      }
     }
-    const nearPeak=new Int32Array(fftSize/2).fill(-1);
-    let lp=-1;
-    for(let k=0;k<fftSize/2;k++){if(isPeak[k])lp=k;if(lp>=0)nearPeak[k]=lp;}
-    lp=-1;
-    for(let k=fftSize/2-1;k>=0;k--){
-      if(isPeak[k])lp=k;
-      if(lp>=0&&(nearPeak[k]<0||Math.abs(lp-k)<Math.abs(nearPeak[k]-k)))nearPeak[k]=lp;
+    for(let i=0;i<outLen;i++) if(winSum[i]>1e-6) out[i]/=winSum[i];
+    return out;
+  } else {
+    // WSOLA async
+    const opts=mode==='musique'
+      ?{frameSize:4096,overlap:0.75,searchRadius:512}
+      :mode==='wsola-voix'
+      ?{frameSize:2048,overlap:0.75,searchRadius:256}
+      :{frameSize:1024,overlap:0.75,searchRadius:128};
+    const {frameSize,overlap,searchRadius}=opts;
+    const synthesisHop=Math.floor(frameSize*(1-overlap));
+    const analysisHop=synthesisHop/factor;
+    const outputLength=Math.round(samples.length*factor);
+    const output=new Float32Array(outputLength);
+    const weight=new Float32Array(outputLength);
+    const win=new Float32Array(frameSize);
+    for(let i=0;i<frameSize;i++) win[i]=0.5-0.5*Math.cos(2*Math.PI*i/(frameSize-1));
+    const totalFrames=Math.ceil((outputLength-frameSize)/synthesisHop)||1;
+    let frameCount=0, inPos=0, outPos=0;
+    for(let i=0;i<frameSize;i++){output[i]+=(samples[i]||0)*win[i];weight[i]+=win[i];}
+    inPos+=analysisHop; outPos+=synthesisHop;
+    while(outPos+frameSize<outputLength&&inPos+frameSize<samples.length){
+      const exp=Math.round(inPos);
+      let bestOffset=0,bestScore=-Infinity;
+      const prev=outPos-synthesisHop;
+      for(let offset=-searchRadius;offset<=searchRadius;offset++){
+        const cp=exp+offset;
+        if(cp<0||cp+frameSize>=samples.length) continue;
+        let corr=0,eA=0,eB=0;
+        for(let i=0;i<synthesisHop;i++){const a=samples[cp+i],b=output[prev+synthesisHop+i];corr+=a*b;eA+=a*a;eB+=b*b;}
+        const score=corr/(Math.sqrt(eA*eB)+1e-12);
+        if(score>bestScore){bestScore=score;bestOffset=offset;}
+      }
+      const bp=exp+bestOffset;
+      for(let i=0;i<frameSize;i++){const oi=outPos+i;if(oi>=outputLength)break;output[oi]+=(samples[bp+i]||0)*win[i];weight[oi]+=win[i];}
+      inPos+=analysisHop; outPos+=synthesisHop;
+      frameCount++;
+      if(frameCount%200===0){
+        setOv(true, undefined, Math.round(pctMin + (pctMax-pctMin)*frameCount/totalFrames));
+        await tick(0);
+      }
     }
-    const nRe=new Float32Array(fftSize),nIm=new Float32Array(fftSize);
-    for(let k=0;k<fftSize/2;k++){
-      let acc;
-      if(isPeak[k]){acc=phaseAcc[k];}
-      else{const p=nearPeak[k];acc=p>=0?phaseAcc[p]+(phase[k]-phase[p]):phaseAcc[k];}
-      lastPhase[k]=phase[k];
-      nRe[k]=mag[k]*Math.cos(acc);nIm[k]=mag[k]*Math.sin(acc);
-      if(k>0&&k<fftSize/2){nRe[fftSize-k]=nRe[k];nIm[fftSize-k]=-nIm[k];}
-    }
-    ifftInPlace(nRe,nIm);
-    for(let i=0;i<fftSize;i++){out[synPos+i]+=nRe[i]*w[i];winSum[synPos+i]+=w[i]*w[i];}
-    anaPos+=hop; synPos+=synHop; frameCount++;
-    if(frameCount%50===0){
-      setOv(true, undefined, Math.min(95,Math.round(frameCount/totalFrames*100)));
-      await tick(0);  // libérer le thread brièvement
-    }
+    for(let i=0;i<outputLength;i++) if(weight[i]>1e-12) output[i]/=weight[i];
+    return output;
   }
-  for(let i=0;i<outLen;i++) if(winSum[i]>1e-6) out[i]/=winSum[i];
-  return out;
 }
 
 function clearStretchCache(){ stretchCache={}; }
@@ -1611,9 +1655,9 @@ async function getPlayBuffer(spd, silent=false){
     const right = new Float32Array(abuf.getChannelData(1));
     // Utiliser le fallback async pour les deux canaux — le Worker ne peut pas
     // être appelé deux fois de suite avec des buffers transférés
-    const strL = await timeStretchSyncAsync(left,  algoMode, factor);
+    const strL = await timeStretchSyncAsync(left,  algoMode, factor, 0,  50);
     if(!strL){ cancelBtn.style.display='none'; if(!silent) setOv(false); return abuf; }
-    const strR = await timeStretchSyncAsync(right, algoMode, factor);
+    const strR = await timeStretchSyncAsync(right, algoMode, factor, 50, 100);
     if(!strR){ cancelBtn.style.display='none'; if(!silent) setOv(false); return abuf; }
     buf = actx.createBuffer(2, strL.length, abuf.sampleRate);
     buf.getChannelData(0).set(strL);
@@ -2075,7 +2119,7 @@ function selEnd(e){
     sc.style.outline='';
     const w=playing; if(w) pause();
     ph.style.display='none';
-    clearStretchCache();
+
     setZoomBadge(true);
     const job=busy;
     analyze(job).then(()=>{
@@ -2105,7 +2149,7 @@ function selEnd(e){
   const w=playing; if(w) pause();
   viewStart=t0s; viewEnd=t1s;
   offset = (currentPos >= t0s && currentPos < t1s) ? currentPos : t0s;
-  clearStretchCache();
+
   setZoomBadge(true);
   ph.style.display='none';
   const job=busy;
@@ -2166,7 +2210,7 @@ function zoomOutStep(){
   updatePanButtons();
   const w=playing; if(w) pause();
   ph.style.display='none';
-  clearStretchCache();
+
   const job=busy;
   analyze(job).then(()=>{
     if(job!==busy) return;
@@ -2192,7 +2236,7 @@ function panView(dir){
   updatePanButtons();
   const w=playing; if(w) pause();
   ph.style.display='none';
-  clearStretchCache();
+
   const job=busy;
   analyze(job).then(()=>{
     if(job!==busy) return;
@@ -2236,7 +2280,7 @@ function exitZoom(){
   viewStart=0; viewEnd=dur;
   offset = currentPos;
   setZoomBadge(false);
-  clearStretchCache();
+
   ph.style.display='none';
   const job=busy;
   analyze(job).then(()=>{

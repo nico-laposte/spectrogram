@@ -2751,6 +2751,13 @@ function selMove(e){
     // Redessiner depuis specFull en temps réel
     drawSpecFromFull(viewStart, viewEnd);
     drawCurveFromFull(viewStart, viewEnd);
+    // Maintenir le curseur visible pendant le glissement
+    if(!playing && offset >= viewStart && offset < viewEnd){
+      ph.style.display='block';
+      drawPlayhead(offset);
+    } else if(!playing){
+      ph.style.display='none';  // hors zone → on le cache
+    }
     setZoomBadge(true);
     e.preventDefault(); return;
   }
@@ -2774,17 +2781,13 @@ function selEnd(e){
   if(sliding){
     sliding=false;
     sc.style.outline='';
-    const w=playing; if(w) pause();
-    ph.style.display='none';
+    const wasPlaying = playing;
+    if(wasPlaying) ph.style.display='none';  // loop() la remettra ; en pause on garde visible
 
+    const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
     setZoomBadge(true);
     const job=busy;
-    analyze(job).then(()=>{
-      if(job!==busy) return;
-      timeLabels();
-      ph.style.display='block'; drawPlayhead(offset);
-      if(w) play();
-    });
+    analyze(job).then(()=>{ afterAnalyze(job, wasPlaying, snap); });
     e.preventDefault(); return;
   }
   if(draggingPH){
@@ -2799,28 +2802,63 @@ function selEnd(e){
   // Ignorer les sélections trop petites (tap accidentel)
   if(b-a < 0.02){ return; }
   const t0s=xToTime(a), t1s=xToTime(b);
-  // Capturer la position courante AVANT la pause (pause() modifie offset)
-  const currentPos = playing
-    ? Math.min(viewEnd, Math.max(viewStart, currentPlayPos))
-    : offset;
-  const w=playing; if(w) pause();
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  const wasPlaying = playing;
   viewStart=t0s; viewEnd=t1s;
-  offset = (currentPos >= t0s && currentPos < t1s) ? currentPos : t0s;
 
   setZoomBadge(true);
   ph.style.display='none';
   const job=busy;
-  analyze(job).then(()=>{
-    if(job!==busy) return;
-    // Repositionner la tête au bon endroit après le redessin
-    const winLen = viewEnd - viewStart;
-    const r = winLen>0 ? (offset - viewStart)/winLen : 0;
-    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
-    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
-    ph.style.display='block';
-    drawPlayhead(offset);
-    if(w) play();
-  });
+  analyze(job).then(()=>{ afterAnalyze(job, wasPlaying, snap); });
+}
+// Appelé après toute ré-analyse suite à un zoom/dézoom/pan/glissement.
+// Recadre offset, met à jour l'UI, relance la lecture si elle était active.
+function afterAnalyze(job, wasPlaying, snap){
+  if(job !== busy) return;
+  // snap = {offset0, t0_0, vs0, ve0} capturés AVANT tout changement de vue
+  // On recalcule la position exacte ICI, après l'analyse, depuis l'horloge audio
+  let livePos;
+  if(wasPlaying && playing && snap){
+    livePos = snap.offset0 + (actx.currentTime - snap.t0_0) * speed;
+    // Appliquer le modulo de boucle avec les ANCIENNES bornes (avant zoom/dézoom)
+    if(looping && snap.vs0 !== undefined){
+      const oldWin = snap.ve0 - snap.vs0;
+      if(oldWin > 0){
+        while(livePos >= snap.ve0) livePos -= oldWin;
+        while(livePos <  snap.vs0) livePos += oldWin;
+      }
+    }
+  } else if(snap){
+    livePos = snap.offset0;
+  } else {
+    livePos = offset;
+  }
+  const outOfView = livePos < viewStart || livePos >= viewEnd;
+
+  if(wasPlaying && playing && !outOfView){
+    offset = livePos;
+    t0 = actx.currentTime;
+    if(src){
+      src.loopStart = viewStart / speed;
+      src.loopEnd   = viewEnd   / speed;
+    }
+  } else if(outOfView){
+    offset = viewStart;
+  } else {
+    offset = livePos;
+  }
+
+  const winLen = viewEnd - viewStart;
+  const r = winLen > 0 ? (offset - viewStart) / winLen : 0;
+  pf.style.width = (r * 100) + '%'; pr.value = Math.round(r * 1000);
+  td.textContent = fmt(offset) + ' / ' + fmt(viewEnd);
+  timeLabels();
+  ph.style.display = 'block'; drawPlayhead(offset);
+
+  if(wasPlaying){
+    if(!playing)        { play(); }
+    else if(outOfView)  { pause(); play(); }
+  }
 }
 function setZoomBadge(on){
   zoomBadge.classList.toggle('on', on);
@@ -2863,21 +2901,14 @@ function zoomOutStep(){
   viewEnd   = Math.min(dur, ne);
   // Si on couvre tout le fichier → quitter le zoom
   if(viewStart <= 0 && viewEnd >= dur){ exitZoom(); return; }
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
   setZoomBadge(true);
   updatePanButtons();
-  const w=playing; if(w) pause();
+  const wasPlaying = playing;
   ph.style.display='none';
 
   const job=busy;
-  analyze(job).then(()=>{
-    if(job!==busy) return;
-    const winLen=viewEnd-viewStart;
-    const r=winLen>0?(offset-viewStart)/winLen:0;
-    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
-    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
-    ph.style.display='block'; drawPlayhead(offset);
-    if(w) play();
-  });
+  analyze(job).then(()=>{ afterAnalyze(job, wasPlaying, snap); });
 }
 
 function panView(dir){
@@ -2889,24 +2920,14 @@ function panView(dir){
   if(ns < 0){ ne -= ns; ns = 0; }
   if(ne > dur){ ns -= (ne-dur); ne = dur; }
   viewStart = Math.max(0,ns); viewEnd = Math.min(dur,ne);
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
   setZoomBadge(true);
   updatePanButtons();
-  const w=playing; if(w) pause();
+  const wasPlaying = playing;
   ph.style.display='none';
 
   const job=busy;
-  analyze(job).then(()=>{
-    if(job!==busy) return;
-    // Recadrer offset dans la nouvelle fenêtre
-    if(offset < viewStart) offset = viewStart;
-    if(offset > viewEnd)   offset = viewEnd;
-    const winLen = viewEnd - viewStart;
-    const r = winLen>0 ? (offset-viewStart)/winLen : 0;
-    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
-    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
-    ph.style.display='block'; drawPlayhead(offset);
-    if(w)play();
-  });
+  analyze(job).then(()=>{ afterAnalyze(job, wasPlaying, snap); });
 }
 document.getElementById('panLeft').addEventListener('click',  e=>{ e.stopPropagation(); panView(-1); });
 document.getElementById('panLeft').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); panView(-1); });
@@ -2927,29 +2948,14 @@ loopBtn.addEventListener('click',()=>{
 });
 function exitZoom(){
   if(!abuf) return;
-  const winLen = viewEnd - viewStart;
-  let currentPos;
-  if(playing){
-    // currentPlayPos est maintenu à jour par loop() — position exacte même en boucle
-    currentPos = Math.min(viewEnd, Math.max(viewStart, currentPlayPos));
-  } else { currentPos = offset; }
-  const w=playing; if(w) pause();
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  const wasPlaying = playing;
   viewStart=0; viewEnd=dur;
-  offset = currentPos;
   setZoomBadge(false);
 
   ph.style.display='none';
   const job=busy;
-  analyze(job).then(()=>{
-    if(job!==busy) return;
-    const winLen = viewEnd - viewStart;
-    const r = winLen>0 ? (offset - viewStart)/winLen : 0;
-    pf.style.width=(r*100)+'%'; pr.value=Math.round(r*1000);
-    td.textContent=fmt(offset)+' / '+fmt(viewEnd);
-    ph.style.display='block';
-    drawPlayhead(offset);
-    if(w) play();
-  });
+  analyze(job).then(()=>{ afterAnalyze(job, wasPlaying, snap); });
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────────────
@@ -2957,7 +2963,8 @@ let _lastOvPct = 0;
 function setOv(on, txt, pct){
   ov.classList.toggle('on', on);
   if(txt !== undefined) ot.textContent = txt;
-  if(!on){ ob.style.width = '0%'; _lastOvPct = 0; return; }
+  if(!on){ ob.style.width = '0%'; _lastOvPct = 0; if(drawn) ph.style.display='block'; return; }
+  ph.style.display='none';
   if(pct !== undefined){ ob.style.width = pct + '%'; _lastOvPct = pct; }
 }
 function tick(ms){ return new Promise(r=>setTimeout(r,ms||0)); }

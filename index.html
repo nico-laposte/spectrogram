@@ -26,6 +26,7 @@ header .sub-title{font-size:10px;color:var(--mut);letter-spacing:.12em;text-tran
 .viz{flex:1;margin:8px 16px;position:relative;border-radius:10px;overflow:hidden;background:var(--surf);border:1px solid var(--bdr);min-height:0}
 canvas{position:absolute;inset:0;width:100%;height:100%}
 #pc{pointer-events:none}
+#fc{pointer-events:none}
 .em{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--mut);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
 .em svg{opacity:.3}
 #ph{position:absolute;top:0;bottom:0;width:40px;transform:translateX(-50%);display:none;cursor:ew-resize;touch-action:none;z-index:10}
@@ -106,12 +107,13 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
   <div class="tip" id="tip"></div>
 
   <div class="viz">
-    <canvas id="sc"></canvas><canvas id="pc"></canvas><canvas id="hc"></canvas>
+    <canvas id="sc"></canvas><canvas id="pc"></canvas><canvas id="fc"></canvas><canvas id="hc"></canvas>
     <div id="sel"></div>
     <div id="ph"></div>
     <div class="fl" id="flbl"></div>
     <div class="tl" id="tlbl"></div>
     <div id="selrd"></div>
+    <div id="keyBadge" style="display:none;position:absolute;top:6px;left:8px;z-index:12;background:rgba(10,15,10,.72);border:1px solid var(--bdr);border-radius:8px;padding:3px 9px;font-family:'DM Mono',monospace;font-size:11px;font-weight:600;color:rgba(255,225,140,.95);cursor:pointer;user-select:none" title="Tonalité détectée — cliquer pour désactiver"></div>
     <div id="zoomBadge">
       <button id="panLeft" aria-label="Décaler gauche">◀</button>
       <span id="zoomTxt"></span>
@@ -126,7 +128,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
     </div>
     <div class="ov" id="ov"><div class="sp"></div><div class="ot" id="ot">Analyse…</div><div class="ob"><div id="ob"></div></div><button id="cancelBtn" style="display:none;margin-top:8px;padding:4px 14px;border-radius:8px;border:1px solid var(--bdr);background:transparent;color:var(--mut);font-size:11px;cursor:pointer">Annuler</button></div>
   </div>
-
+  <div id="chordStrip" style="display:none;flex-shrink:0;margin:0 16px 6px;height:24px;position:relative;background:var(--surf);border:1px solid var(--bdr);border-top:none;border-radius:0 0 7px 7px;overflow:hidden"></div>
 
   <div class="ctrl">
     <div class="row">
@@ -197,6 +199,15 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
         <button class="pl on" id="ptg"></button>
         <div class="rl" style="min-width:0;margin-left:14px">Notes</div>
         <button class="pl on" id="ntg"></button>
+        <div class="rl" id="chordToggleLabel" style="min-width:0;margin-left:14px;display:none">Accords</div>
+        <button class="pl on" id="chtg" style="display:none"></button>
+      </div>
+      <div class="row" id="rowFormants" style="display:none">
+        <div class="rl">F1 F2</div>
+        <div class="dot" style="background:#4ac8f0"></div>
+        <button class="pl" id="ftg"></button>
+        <button id="vowelLangBtn" title="Langue des voyelles" style="flex:0 0 auto;height:24px;padding:0 8px;border-radius:10px;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-family:'DM Mono',monospace;font-size:10px;cursor:pointer;margin-left:8px;white-space:nowrap">FR</button>
+        <span style="font-size:9px;color:var(--mut);margin-left:6px">Formants (LPC)</span>
       </div>
     </div>
   </div>
@@ -210,12 +221,14 @@ let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
 
 // L'AudioContext est créé à la demande dans playPianoNote ou load()
 
-let playing=false, showP=true, showNotes=true, busy=0, drawn=false, raf;
+let playing=false, showP=true, showNotes=true, showFormants=false, busy=0, drawn=false, raf;
 let currentPlayPos=0;  // position réelle mise à jour à chaque frame par loop()
 let curve=[], spec=null;
+let formants=[];  // [{t, f1, f2}] ou null par frame
 let curveFull=[];  // courbe de pitch haute résolution sur tout le fichier
 // Fenêtre visible (zoom) en secondes + mode boucle + sélection en cours
 let viewStart=0, viewEnd=0, looping=true;
+function isFullView(){ return !abuf || (viewStart===0 && Math.abs(viewEnd - abuf.duration) < 0.01); }
 let selX0=null, selX1=null, selecting=false, draggingPH=false, draggingPHWasPlaying=false;
 let sliding=false, slideStartX=0, slideStartVS=0, slideStartVE=0, slideTimer=null;
 let slideCurveSnapshot=[], slideVSSnapshot=0, slideVESnapshot=0, slideMinLen=1;
@@ -224,7 +237,8 @@ let stopTimer=null;
 const $ = id => document.getElementById(id);
 const iz=$('iz'), ilbl=$('ilbl'), tip=$('tip'), sc=$('sc'), pc=$('pc'), ph=$('ph');
 const flbl=$('flbl'), tlbl=$('tlbl'), em=$('em'), ov=$('ov'), ot=$('ot'), ob=$('ob'), cancelBtn=$('cancelBtn');
-const pb=$('pb'), rwb=$('rwb'), pi=$('pi'), pf=$('pf'), pr=$('pr'), td=$('td'), ptg=$('ptg'), ntg=$('ntg');
+const pb=$('pb'), rwb=$('rwb'), pi=$('pi'), pf=$('pf'), pr=$('pr'), td=$('td'), ptg=$('ptg'), ntg=$('ntg'), ftg=$('ftg'), chtg=$('chtg');
+const fc=$('fc');
 const pmin=$('pmin'), pmax=$('pmax');
 const ymin=$('ymin'), ymax=$('ymax');
 const sel=$('sel'), selrd=$('selrd'), loopBtn=$('loopBtn');
@@ -340,7 +354,7 @@ async function analyze(job){
 
   const W = sc.parentElement.clientWidth||320;
   const H = sc.parentElement.clientHeight||200;
-  sc.width=W; sc.height=H; pc.width=W; pc.height=H;
+  sc.width=W; sc.height=H; pc.width=W; pc.height=H; fc.width=W; fc.height=H;
 
   const sr   = abuf.sampleRate;
   const data = monoMix(abuf);
@@ -375,10 +389,21 @@ async function analyze(job){
   spec={out,cols,maxBin,gMax};
   try{
     drawSpec(W,H);
-    if(multiPitch || pitchAlgo==='multi'){ makeCurveMusic(); drawCurveMusic(H); }
-    else if(pitchAlgo==='amdf'){ makeCurveAMDF(); drawCurve(H); }
-    else if(pitchAlgo==='yin'){  makeCurveYIN();  drawCurve(H); }
-    else { makeCurve(); drawCurve(H); }
+    if(multiPitch || pitchAlgo==='multi'){
+      makeCurveMusic();
+      if(isFullView()) runKeyDetection();
+      makeChords();
+      drawCurveMusic(H);
+      showChordStrip(showChords);
+      drawChords();
+    } else {
+      makeCurve && (pitchAlgo==='amdf' ? makeCurveAMDF() : pitchAlgo==='yin' ? makeCurveYIN() : makeCurve());
+      drawCurve(H);
+      showChordStrip(false);
+    }
+    if(!(multiPitch || pitchAlgo==='multi') && isFullView()) runKeyDetection();
+    if(stretchMode==='voix'){ makeFormants(); drawFormants(H); }
+    else { formants=[]; fc.width=fc.width; }  // effacer si autre mode
     freqLabels();
     timeLabels();
   }catch(err){ console.error('draw error:', err); }
@@ -717,7 +742,8 @@ function labelHeldNotesMusic(ctx,W,H,yOf){
         const midT=(pts[i].t+pts[j-1].t)/2;
         const avgHz=pts.slice(i,j).reduce((s,p)=>s+p.hz,0)/cnt;
         const x=midT*W, baseY=yOf(avgHz)-16;
-        const w=ctx.measureText(pts[i].label).width;
+        const liveLabel = (hzToNote(avgHz)||{label:pts[i].label}).label;
+        const w=ctx.measureText(liveLabel).width;
         let y=baseY;
         // Anti-collision : vérifier tous les labels déjà placés
         let changed=true;
@@ -732,7 +758,7 @@ function labelHeldNotesMusic(ctx,W,H,yOf){
         ctx.fillStyle='rgba(10,15,10,.55)';
         ctx.fillRect(x-w/2-2,y,w+4,11);
         ctx.fillStyle='rgba(255,225,140,.95)';
-        ctx.fillText(pts[i].label,x,y+1);
+        ctx.fillText(liveLabel,x,y+1);
       }
       i=j;
     }
@@ -741,9 +767,291 @@ function labelHeldNotesMusic(ctx,W,H,yOf){
   ctx.fillStyle='rgba(255,80,80,.95)';
 }
 
+// ── DÉTECTION D'ACCORDS ──────────────────────────────────────────────────
+// Dictionnaire : intervalles en demi-tons depuis la fondamentale
+const CHORD_TYPES = [
+  // Triades
+  { suffix: '',    intervals: [0,4,7]         },  // major
+  { suffix: 'm',   intervals: [0,3,7]         },  // minor
+  { suffix: 'dim', intervals: [0,3,6]         },  // diminished
+  { suffix: 'aug', intervals: [0,4,8]         },  // augmented
+  // Septièmes
+  { suffix: '7',   intervals: [0,4,7,10]      },  // dominant 7
+  { suffix: 'maj7',intervals: [0,4,7,11]      },  // major 7
+  { suffix: 'm7',  intervals: [0,3,7,10]      },  // minor 7
+  { suffix: 'm7b5',intervals: [0,3,6,10]      },  // half-dim
+  { suffix: 'dim7',intervals: [0,3,6,9]       },  // diminished 7
+  { suffix: 'mM7', intervals: [0,3,7,11]      },  // minor major 7
+  // Sus / Add
+  { suffix: 'sus2',intervals: [0,2,7]         },
+  { suffix: 'sus4',intervals: [0,5,7]         },
+  { suffix: 'add9',intervals: [0,4,7,14]      },  // 14 = 2+octave
+  { suffix: 'madd9',intervals:[0,3,7,14]      },
+];
+
+let chords = [];      // [{t0,t1,label}]  — segments d'accords
+let showChords = true;
+
+// Nom de note pour une classe de hauteur, en respectant la tonalité
+function pcToName(pc) {
+  const names = (keyNames && keyEnabled)
+    ? keyNames
+    : ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  return names[((pc % 12) + 12) % 12];
+}
+
+function scoreChord(activePCs, rootPC, type) {
+  // Score = nb d'intervalles du type présents dans les PCs actifs
+  // Pénalité légère pour chaque note active qui n'appartient pas à l'accord
+  const chordPCs = new Set(type.intervals.map(i => (rootPC + i) % 12));
+  let hits = 0, extra = 0;
+  for (const pc of chordPCs) if (activePCs.has(pc)) hits++;
+  for (const pc of activePCs) if (!chordPCs.has(pc)) extra++;
+  // Score normalisé : couverture − bruit
+  const coverage = hits / type.intervals.length;
+  const noise    = extra / Math.max(activePCs.size, 1);
+  return coverage - 0.3 * noise;
+}
+
+function classifyChord(activePCs) {
+  // activePCs : Set de pitch-classes (0–11) présentes dans la fenêtre
+  if (activePCs.size < 2) return null;
+  let bestLabel = null, bestScore = 0.55;  // seuil minimal
+  for (let root = 0; root < 12; root++) {
+    if (!activePCs.has(root)) continue;   // la fondamentale doit être présente
+    for (const type of CHORD_TYPES) {
+      const s = scoreChord(activePCs, root, type);
+      if (s > bestScore) {
+        bestScore = s;
+        bestLabel = pcToName(root) + type.suffix;
+      }
+    }
+  }
+  return bestLabel;
+}
+
+function makeChords() {
+  chords = [];
+  if (!curveMusic.length) return;
+
+  const N = curveMusic.length;
+
+  // ── 1. Fenêtre adaptée à la durée : ~500 ms, pas ~125 ms
+  const framesPerSec = N / (abuf ? abuf.duration : 1);
+  const WIN_SEC  = Math.min(0.6, abuf ? abuf.duration * 0.12 : 0.5);
+  const STEP_SEC = WIN_SEC * 0.25;
+  const WIN  = Math.max(6, Math.round(framesPerSec * WIN_SEC));
+  const STEP = Math.max(2, Math.round(framesPerSec * STEP_SEC));
+
+  // ── 2. Accumulation pondérée par présence temporelle
+  const raw = [];
+  for (let i = 0; i < N; i += STEP) {
+    const j = Math.min(N, i + WIN);
+    const pcWeight = new Float32Array(12);
+    let totalNotes = 0;
+    for (let k = i; k < j; k++) {
+      for (const n of curveMusic[k].notes) {
+        pcWeight[((n.midi % 12) + 12) % 12] += 1;
+        totalNotes++;
+      }
+    }
+    if (totalNotes < 3) { raw.push({ t: curveMusic[Math.floor((i+j)/2)].t, label: null }); continue; }
+
+    const maxW = Math.max(...pcWeight);
+    const activePCs = new Set();
+    for (let pc = 0; pc < 12; pc++) {
+      if (pcWeight[pc] / maxW >= 0.15) activePCs.add(pc);
+    }
+
+    // Score pondéré sur tous les accords possibles
+    let bestLabel = null, bestScore = 0.45;
+    for (let root = 0; root < 12; root++) {
+      if (!activePCs.has(root)) continue;
+      for (const type of CHORD_TYPES) {
+        let hit = 0;
+        for (const iv of type.intervals) hit += pcWeight[(root + iv) % 12] / maxW;
+        let noise = 0;
+        for (const pc of activePCs)
+          if (!type.intervals.some(iv => (root + iv) % 12 === pc)) noise++;
+        const score = (hit / type.intervals.length) - 0.2 * (noise / Math.max(activePCs.size, 1));
+        if (score > bestScore) { bestScore = score; bestLabel = pcToName(root) + type.suffix; }
+      }
+    }
+    raw.push({ t: curveMusic[Math.floor((i + j) / 2)].t, label: bestLabel });
+  }
+
+  // ── 3. Lissage médian sur 3 voisins
+  const smoothed = raw.map((r, i) => {
+    const nb = raw.slice(Math.max(0, i-1), Math.min(raw.length, i+2)).map(x => x.label);
+    const counts = {};
+    for (const l of nb) if (l) counts[l] = (counts[l] || 0) + 1;
+    const best = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+    return { t: r.t, label: best ? best[0] : null };
+  });
+
+  // ── 4. Fusion des segments consécutifs (min 2 fenêtres)
+  const MIN_WIN = 2;
+  let i = 0;
+  while (i < smoothed.length) {
+    const lbl = smoothed[i].label;
+    if (!lbl) { i++; continue; }
+    let j = i + 1;
+    while (j < smoothed.length && smoothed[j].label === lbl) j++;
+    if (j - i >= MIN_WIN) {
+      const t0 = i === 0 ? 0 : (smoothed[i].t + smoothed[i-1].t) / 2;
+      const t1 = j >= smoothed.length ? 1 : (smoothed[j-1].t + smoothed[j].t) / 2;
+      chords.push({ t0, t1, label: lbl });
+    }
+    i = j;
+  }
+}
+
+function drawChords() {
+  const strip = $('chordStrip');
+  strip.innerHTML = '';
+  if (!showChords || !chords.length) return;
+
+  const W = strip.clientWidth || strip.offsetWidth || 300;
+
+  for (const c of chords) {
+    const left  = c.t0 * 100;
+    const width = Math.max(0, (c.t1 - c.t0) * 100);
+    if (width < 0.5) continue;
+
+    const el = document.createElement('div');
+    el.style.cssText = [
+      'position:absolute',
+      `left:${left}%`,
+      `width:${width}%`,
+      'top:0','bottom:0',
+      'display:flex','align-items:center','justify-content:center',
+      'font-family:"DM Mono",monospace','font-size:10px','font-weight:600',
+      'color:rgba(240,200,74,.95)',
+      'border-right:1px solid rgba(240,200,74,.18)',
+      'overflow:hidden','white-space:nowrap',
+      'cursor:default',
+    ].join(';');
+    el.textContent = c.label;
+    el.title = c.label;
+    strip.appendChild(el);
+  }
+}
+
+function showChordStrip(visible) {
+  $('chordStrip').style.display = visible ? 'flex' : 'none';
+  document.querySelector('.viz').style.marginBottom = visible ? '0' : '';
+  document.querySelector('.viz').style.borderRadius = visible ? '10px 10px 0 0' : '';
+  $('chordToggleLabel').style.display = visible ? '' : 'none';
+  $('chtg').style.display = visible ? '' : 'none';
+}
+// Profils de saillance tonale (major / minor) — Krumhansl & Kessler 1982
+const KS_MAJOR = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
+const KS_MINOR = [6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+
+// Pour chaque tonalité : les 12 noms de notes préférés (index 0=C … 11=B)
+// Règle : une tonalité à n bémols utilise les bémols, n dièses utilise les dièses.
+// Les noms sont ordonnés par classe de hauteur (0=C, 1=C#/Db, …, 11=B/Cb).
+const KEY_NOTE_NAMES = {
+  // ── Majeures dièses ─────────────────────────────
+  'C maj':  ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'G maj':  ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'D maj':  ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'A maj':  ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'E maj':  ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'B maj':  ['C','Db','D','Eb','E','F','F#','G','Ab','A','Bb','B'],
+  'F# maj': ['C','C#','D','D#','E','E#','F#','G','G#','A','A#','B'],
+  // ── Majeures bémols ─────────────────────────────
+  'F maj':  ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'Bb maj': ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'Eb maj': ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'Ab maj': ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'Db maj': ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'Gb maj': ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  // ── Mineures dièses ─────────────────────────────
+  'A min':  ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'E min':  ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'B min':  ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'F# min': ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'C# min': ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'G# min': ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  'D# min': ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],
+  // ── Mineures bémols ─────────────────────────────
+  'D min':  ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'G min':  ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'C min':  ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'F min':  ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'Bb min': ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'Eb min': ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+  'Ab min': ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'],
+};
+
+let detectedKey = null;    // ex. 'Bb min' | null
+let keyEnabled  = true;    // toggle via clic sur le badge
+let keyNames    = null;    // tableau[12] de noms actuellement actif
+
+function ksCorrelate(profile, weights) {
+  // Corrélation de Pearson entre le profil de référence et les poids mesurés
+  const n = 12;
+  const mP = profile.reduce((a,b)=>a+b)/n;
+  const mW = weights.reduce((a,b)=>a+b)/n;
+  let num=0, dP=0, dW=0;
+  for(let i=0;i<n;i++){
+    const dp=profile[i]-mP, dw=weights[i]-mW;
+    num+=dp*dw; dP+=dp*dp; dW+=dw*dw;
+  }
+  return (dP*dW)<1e-12 ? 0 : num/Math.sqrt(dP*dW);
+}
+
+function detectKey(pitchWeights) {
+  // pitchWeights : Float32Array[12] — énergie par classe de hauteur (0=C)
+  let bestKey=null, bestR=-Infinity;
+  for(let root=0;root<12;root++){
+    // Décaler le profil pour aligner root sur la position 0
+    const rotated = Array.from({length:12}, (_,i) => pitchWeights[(i+root)%12]);
+    const rMaj = ksCorrelate(KS_MAJOR, rotated);
+    const rMin = ksCorrelate(KS_MINOR, rotated);
+    const NOTE=['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+    if(rMaj>bestR){ bestR=rMaj; bestKey=NOTE[root]+' maj'; }
+    if(rMin>bestR){ bestR=rMin; bestKey=NOTE[root]+' min'; }
+  }
+  return bestKey;
+}
+
+// Accumule les poids de pitch depuis curveMusic (mode multi uniquement)
+function computePitchWeights() {
+  const w = new Float32Array(12);
+  for(const frame of curveMusic){
+    for(const n of frame.notes){
+      const pc = ((n.midi%12)+12)%12;
+      w[pc] += 1;
+    }
+  }
+  return w;
+}
+
+function applyDetectedKey(key) {
+  detectedKey = key;
+  keyNames = KEY_NOTE_NAMES[key] || null;
+  const badge = $('keyBadge');
+  if(key && keyEnabled){
+    badge.textContent = '♩ ' + key;
+    badge.style.display = 'block';
+    badge.style.opacity = '1';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function runKeyDetection() {
+  if(!multiPitch || !curveMusic.length){ detectedKey=null; keyNames=null; $('keyBadge').style.display='none'; return; }
+  const w = computePitchWeights();
+  const key = detectKey(w);
+  applyDetectedKey(key);
+}
+
 function hzToNote(hz){
   if(!hz||hz<=0) return null;
-  const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const names = (keyNames && keyEnabled) ? keyNames : ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
   const midi=Math.round(69 + 12*Math.log2(hz/440));
   const name=names[((midi%12)+12)%12];
   const oct=Math.floor(midi/12)-1;
@@ -775,6 +1083,267 @@ function drawCurve(H){
 
   // Étiquettes de notes (indépendantes de l'affichage de la courbe)
   if(showNotes) labelHeldNotes(ctx,W,H,yOf);
+}
+
+// ── FORMANTS F1 / F2 (LPC) ───────────────────────────────────────────────
+// Calcule les coefficients LPC d'ordre p par la méthode d'autocorrélation
+// (algorithme de Levinson-Durbin), puis extrait les racines du polynôme A(z)
+// par la méthode de Newton pour trouver les pics de l'enveloppe spectrale.
+// F1 : 200–1000 Hz   F2 : 700–3500 Hz  (voix humaine adulte)
+
+function lpcCoeffs(frame, order) {
+  const N = frame.length;
+  // Autocorrélations R[0..order]
+  const R = new Float64Array(order + 1);
+  for (let k = 0; k <= order; k++) {
+    let s = 0;
+    for (let n = 0; n < N - k; n++) s += frame[n] * frame[n + k];
+    R[k] = s;
+  }
+  if (R[0] < 1e-12) return null;  // silence
+
+  // Levinson-Durbin
+  const a   = new Float64Array(order + 1);  // coefficients LPC (1-indexés)
+  const tmp = new Float64Array(order + 1);
+  a[1] = -R[1] / R[0];
+  let err = R[0] + R[1] * a[1];
+  for (let m = 2; m <= order; m++) {
+    let lambda = 0;
+    for (let k = 1; k < m; k++) lambda += a[k] * R[m - k];
+    lambda = -(R[m] + lambda) / err;
+    for (let k = 1; k < m; k++) tmp[k] = a[k] + lambda * a[m - k];
+    tmp[m] = lambda;
+    for (let k = 1; k <= m; k++) a[k] = tmp[k];
+    err *= 1 - lambda * lambda;
+    if (err < 1e-12) break;
+  }
+  return a;  // a[1..order], polynôme A(z) = 1 + a[1]z^-1 + … + a[order]z^-order
+}
+
+// Évalue |1/A(e^{j2πf/sr})|² pour trouver les pics (formants)
+function lpcSpectrum(a, order, sr, nPoints) {
+  const spec = new Float32Array(nPoints);
+  for (let i = 0; i < nPoints; i++) {
+    const freq = i / nPoints * (sr / 2);
+    const omega = 2 * Math.PI * freq / sr;
+    // A(z) = 1 + Σ a[k] * e^{-jkω}
+    let re = 1, im = 0;
+    for (let k = 1; k <= order; k++) {
+      re += a[k] * Math.cos(-k * omega);
+      im += a[k] * Math.sin(-k * omega);
+    }
+    const power = re * re + im * im;
+    spec[i] = power < 1e-20 ? 1e20 : 1 / power;
+  }
+  return spec;
+}
+
+function makeFormants() {
+  if (!spec || !abuf) return;
+  const ORDER = 12;        // ordre LPC standard pour la voix
+  const SPEC_PTS = 512;    // résolution de l'enveloppe spectrale
+  const sr = abuf.sampleRate;
+  const data = monoMix(abuf);
+  const total = data.length;
+  const { cols } = spec;
+
+  const vs = Math.floor(viewStart * sr);
+  const ve = Math.min(total, Math.floor(viewEnd * sr));
+  const span = Math.max(FFTN + 1, ve - vs);
+  const frameSize = Math.min(FFTN, 1024);  // fenêtre LPC : 1024 samples suffit
+  const winLPC = hann(frameSize);
+
+  // Plages formants en indices dans le spectre LPC (0..SPEC_PTS → 0..sr/2)
+  const f1Min = Math.floor(200  / (sr / 2) * SPEC_PTS);
+  const f1Max = Math.ceil(1000  / (sr / 2) * SPEC_PTS);
+  const f2Min = Math.floor(700  / (sr / 2) * SPEC_PTS);
+  const f2Max = Math.ceil(3500  / (sr / 2) * SPEC_PTS);
+
+  formants = [];
+  for (let c = 0; c < cols; c++) {
+    const pos = vs + Math.floor(c / cols * (span - frameSize));
+
+    // Appliquer la fenêtre de Hann
+    const frame = new Float64Array(frameSize);
+    let rms = 0;
+    for (let i = 0; i < frameSize; i++) {
+      const s = (data[pos + i] || 0) * winLPC[i];
+      frame[i] = s;
+      rms += s * s;
+    }
+    rms = Math.sqrt(rms / frameSize);
+    if (rms < 0.005) { formants.push(null); continue; }
+
+    const a = lpcCoeffs(frame, ORDER);
+    if (!a) { formants.push(null); continue; }
+
+    const lSpec = lpcSpectrum(a, ORDER, sr, SPEC_PTS);
+
+    // Chercher le pic de F1 dans sa plage
+    let f1Idx = -1, f1Val = -Infinity;
+    for (let i = f1Min + 1; i < f1Max - 1; i++) {
+      if (lSpec[i] > lSpec[i - 1] && lSpec[i] > lSpec[i + 1] && lSpec[i] > f1Val) {
+        f1Val = lSpec[i]; f1Idx = i;
+      }
+    }
+    // Chercher le pic de F2 dans sa plage, au-dessus de F1
+    const f2Start = f1Idx > 0 ? Math.max(f2Min, f1Idx + 3) : f2Min;
+    let f2Idx = -1, f2Val = -Infinity;
+    for (let i = f2Start + 1; i < f2Max - 1; i++) {
+      if (lSpec[i] > lSpec[i - 1] && lSpec[i] > lSpec[i + 1] && lSpec[i] > f2Val) {
+        f2Val = lSpec[i]; f2Idx = i;
+      }
+    }
+
+    const idxToHz = idx => idx / SPEC_PTS * (sr / 2);
+    const f1 = f1Idx >= 0 ? idxToHz(f1Idx) : null;
+    const f2 = f2Idx >= 0 ? idxToHz(f2Idx) : null;
+    const vowel = (f1 && f2) ? classifyVowel(f1, f2) : null;
+    formants.push((f1 || f2) ? { t: c / cols, f1, f2, vowel } : null);
+  }
+}
+
+// ── TABLES DE VOYELLES PAR LANGUE ────────────────────────────────────────
+// Sources : Derivery 1997, Calliope 1989 (FR) ; Arai 2003, Nishi 2008 (JA)
+const VOWELS_FR = [
+  { label: 'i',  f1:  270, f2: 2290 },
+  { label: 'e',  f1:  400, f2: 2060 },
+  { label: 'ɛ',  f1:  550, f2: 1820 },
+  { label: 'a',  f1:  800, f2: 1500 },
+  { label: 'ɑ',  f1:  750, f2: 1100 },
+  { label: 'ɔ',  f1:  570, f2:  840 },
+  { label: 'o',  f1:  400, f2:  740 },
+  { label: 'u',  f1:  300, f2:  760 },
+  { label: 'y',  f1:  280, f2: 1660 },
+  { label: 'ø',  f1:  400, f2: 1420 },
+  { label: 'œ',  f1:  550, f2: 1340 },
+  { label: 'ə',  f1:  440, f2: 1380 },
+  { label: 'ɑ̃', f1:  700, f2:  900 },
+  { label: 'ɛ̃', f1:  530, f2: 1620 },
+  { label: 'õ',  f1:  440, f2:  700 },
+  { label: 'œ̃', f1:  490, f2: 1250 },
+];
+
+// Japonais : 5 voyelles /a i ɯ e o/ — katakana + romaji
+// /ɯ/ (u japonais) : lèvres non-arrondies, F2 bien plus bas que le /u/ français
+const VOWELS_JA = [
+  { label: 'ア a', f1:  820, f2: 1240 },
+  { label: 'イ i', f1:  300, f2: 2240 },
+  { label: 'ウ ɯ', f1:  320, f2: 1370 },
+  { label: 'エ e', f1:  460, f2: 2000 },
+  { label: 'オ o', f1:  430, f2:  820 },
+];
+
+let vowelLang = 'FR';   // 'FR' | 'JA'
+let VOWELS = VOWELS_FR;
+
+// Distance dans l'espace F1/F2 — F2 compressé (×0.4) pour équilibrer les échelles
+function vowelDist(f1, f2, v) {
+  const df1 = f1 - v.f1, df2 = (f2 - v.f2) * 0.4;
+  return Math.sqrt(df1 * df1 + df2 * df2);
+}
+
+function classifyVowel(f1, f2) {
+  if (f1 === null || f2 === null) return null;
+  let best = null, bestD = Infinity;
+  for (const v of VOWELS) {
+    const d = vowelDist(f1, f2, v);
+    if (d < bestD) { bestD = d; best = v; }
+  }
+  // Seuil de confiance plus serré en japonais (seulement 5 voyelles)
+  const threshold = vowelLang === 'JA' ? 500 : 400;
+  return bestD < threshold ? best : null;
+}
+
+function drawFormants(H) {
+  const W = fc.width;
+  const ctx = fc.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  if (!showFormants || !formants.length) return;
+  const yOf = hz => hzToY(hz, H);
+
+  // ── Points F1 / F2 ──────────────────────────────────────────────────────
+  for (const p of formants) {
+    if (!p) continue;
+    const x = p.t * W;
+    if (p.f1 !== null) {
+      ctx.fillStyle = 'rgba(74,200,240,.85)';
+      ctx.beginPath(); ctx.arc(x, yOf(p.f1), 1.8, 0, 6.283); ctx.fill();
+    }
+    if (p.f2 !== null) {
+      ctx.fillStyle = 'rgba(180,100,255,.85)';
+      ctx.beginPath(); ctx.arc(x, yOf(p.f2), 1.8, 0, 6.283); ctx.fill();
+    }
+  }
+
+  // ── Étiquettes de voyelles sur les segments stables ──────────────────────
+  // Un segment stable = même voyelle classifiée ≥ MIN_STABLE frames consécutives
+  const MIN_STABLE = 6;
+
+  // 1) Classifier chaque frame (depuis le cache stocké dans formants[])
+  const classified = formants.map(p => {
+    if (!p || p.f1 === null || p.f2 === null) return null;
+    const v = p.vowel;  // déjà calculé par makeFormants / reclassifié par changement de langue
+    return v ? { label: v.label, t: p.t,
+                 yMid: (yOf(p.f1) + yOf(p.f2)) / 2 } : null;
+  });
+
+  // 2) Regrouper en segments de même voyelle
+  // Police légèrement plus grande pour les kana+romaji japonais
+  const isJA = vowelLang === 'JA';
+  ctx.font = isJA ? 'bold 10px "DM Mono",monospace' : 'bold 11px "DM Mono",monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const placed = [];
+
+  let i = 0;
+  while (i < classified.length) {
+    if (!classified[i]) { i++; continue; }
+    const label = classified[i].label;
+    let j = i + 1;
+    while (j < classified.length && classified[j] && classified[j].label === label) j++;
+    const cnt = j - i;
+    if (cnt >= MIN_STABLE) {
+      // Midpoint temporel et vertical du segment
+      const midT = (classified[i].t + classified[j - 1].t) / 2;
+      const x = midT * W;
+      const sumY = classified.slice(i, j).reduce((s, p) => s + p.yMid, 0);
+      let y = sumY / cnt - 14;  // légèrement au-dessus de la zone F1-F2
+
+      // Anti-collision — largeur adaptée à la longueur du label
+      const tw = ctx.measureText(label).width;
+      const collW = tw + 8;
+      let moved = true;
+      while (moved) {
+        moved = false;
+        for (const pl of placed) {
+          if (Math.abs(pl.x - x) < (collW + pl.tw) / 2 + 2 && Math.abs(pl.y - y) < 14) {
+            y -= 15; moved = true; break;
+          }
+        }
+      }
+      y = Math.max(6, Math.min(H - 12, y));
+      placed.push({ x, y, tw });
+
+      // Fond semi-transparent
+      ctx.fillStyle = 'rgba(10,15,10,.68)';
+      ctx.fillRect(x - tw / 2 - 3, y - 7, tw + 6, 14);
+
+      // Texte violet clair
+      ctx.fillStyle = 'rgba(200,160,255,.97)';
+      ctx.fillText(label, x, y);
+    }
+    i = j;
+  }
+
+  // ── Légendes F1 / F2 en haut à gauche ────────────────────────────────────
+  ctx.font = '600 8px "DM Mono",monospace';
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(74,200,240,.9)';
+  ctx.fillText('F1', 4, 4);
+  ctx.fillStyle = 'rgba(180,100,255,.9)';
+  ctx.fillText('F2', 18, 4);
 }
 
 // Détecte les plateaux de hauteur stables et y pose une étiquette de note,
@@ -922,6 +1491,20 @@ function drawCurveFromFull(vs, ve){
     window._overrideMinLen = savedML;
   }
   ctx.fillStyle='rgba(255,80,80,.9)';
+
+  // Formants pendant le glissement — reprojection du snapshot
+  if(showFormants && stretchMode==='voix' && formants.length){
+    const fctx = fc.getContext('2d');
+    fctx.clearRect(0,0,W,H);
+    for(const p of formants){
+      if(!p) continue;
+      const tAbs = slideVSSnapshot + p.t * snapLen;
+      if(tAbs < vs || tAbs > ve) continue;
+      const x = (tAbs - vs) / winLen * W;
+      if(p.f1 !== null){ fctx.fillStyle='rgba(74,200,240,.85)'; fctx.beginPath(); fctx.arc(x,yOf(p.f1),1.8,0,6.283); fctx.fill(); }
+      if(p.f2 !== null){ fctx.fillStyle='rgba(180,100,255,.85)'; fctx.beginPath(); fctx.arc(x,yOf(p.f2),1.8,0,6.283); fctx.fill(); }
+    }
+  }
 }
 
 function drawSpecFromFull(vs, ve){
@@ -1067,6 +1650,8 @@ function autoDetectMode(){
     showNotes=true; ntg.classList.add('on');
     setScaleLog(false); setMultiPitch(false); setPitchAlgo('peak');
     setAlgo('wsola-oiseau');
+    $('rowFormants').style.display='none';
+    showChordStrip(false);
   } else if(detectedMode==='musique'){
     ymin.value=80; ymax.value=1600; applyAxis();
     pmin.value=80; pmax.value=1200;
@@ -1074,12 +1659,16 @@ function autoDetectMode(){
     showP=true; ptg.classList.add('on');
     setScaleLog(true); setMultiPitch(true); setPitchAlgo('multi');
     setAlgo('wsola-musique');
+    $('rowFormants').style.display='none';
+    showChordStrip(showChords);
   } else {
     ymin.value=80; ymax.value=8000; applyAxis();
     pmin.value=80; pmax.value=1100;
     showNotes=false; ntg.classList.remove('on');
     setScaleLog(true); setMultiPitch(false); setPitchAlgo('peak');
     setAlgo('pv');
+    $('rowFormants').style.display='flex';
+    showChordStrip(false);
   }
   _detectingMode = false;
 }
@@ -1916,6 +2505,44 @@ ntg.addEventListener('click',()=>{
   if(stretchMode==='musique') drawCurveMusic(pc.height);
   else drawCurve(pc.height);
 });
+$('chtg').addEventListener('click',()=>{
+  showChords=!showChords; $('chtg').classList.toggle('on',showChords);
+  showChordStrip(showChords);
+  if(showChords) drawChords();
+});
+$('keyBadge').addEventListener('click', ()=>{
+  keyEnabled = !keyEnabled;
+  const badge = $('keyBadge');
+  if(keyEnabled){
+    badge.style.opacity = '1';
+    badge.title = 'Tonalité détectée — cliquer pour désactiver';
+    if(detectedKey){ badge.textContent = '♩ ' + detectedKey; }
+  } else {
+    badge.style.opacity = '0.4';
+    badge.title = 'Tonalité désactivée — cliquer pour réactiver';
+  }
+  if(drawn){ drawCurveMusic(pc.height); if(showChords) drawChords(); }
+});
+ftg.addEventListener('click',()=>{
+  showFormants=!showFormants; ftg.classList.toggle('on',showFormants);
+  if(!drawn) return;
+  drawFormants(fc.height);
+});
+$('vowelLangBtn').addEventListener('click',()=>{
+  vowelLang = vowelLang === 'FR' ? 'JA' : 'FR';
+  VOWELS = vowelLang === 'FR' ? VOWELS_FR : VOWELS_JA;
+  const btn = $('vowelLangBtn');
+  btn.textContent = vowelLang;
+  btn.style.borderColor = vowelLang === 'JA' ? 'var(--acc)' : 'var(--bdr)';
+  btn.style.color = vowelLang === 'JA' ? 'var(--acc)' : 'var(--mut)';
+  // Reclassifier et redessiner avec la nouvelle langue
+  if(drawn && formants.length){
+    for(const p of formants){
+      if(p && p.f1 && p.f2) p.vowel = classifyVowel(p.f1, p.f2);
+    }
+    drawFormants(fc.height);
+  }
+});
 // ── ÉCHELLE & DÉTECTION ───────────────────────────────────────────────────
 function setScaleLog(log){
   logScale = log;
@@ -1992,6 +2619,9 @@ document.getElementById('modeOiseau').addEventListener('click',async()=>{
   document.getElementById('modeVoix').classList.remove('on');
   document.getElementById('modeMusique').classList.remove('on');
   showNotes=true; ntg.classList.add('on');
+  $('rowFormants').style.display='none';
+  $('keyBadge').style.display='none';
+  showChordStrip(false);
   setAlgo('wsola-oiseau');
   if(abuf){
     if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }
@@ -2008,6 +2638,9 @@ document.getElementById('modeVoix').addEventListener('click',async()=>{
   document.getElementById('modeOiseau').classList.remove('on');
   document.getElementById('modeMusique').classList.remove('on');
   showNotes=false; ntg.classList.remove('on');
+  $('rowFormants').style.display='flex';
+  $('keyBadge').style.display='none';
+  showChordStrip(false);
   setAlgo('pv');
   if(abuf){
     if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }
@@ -2025,6 +2658,8 @@ document.getElementById('modeMusique').addEventListener('click',async()=>{
   document.getElementById('modeVoix').classList.remove('on');
   showNotes=true; ntg.classList.add('on');
   showP=true; ptg.classList.add('on');
+  $('rowFormants').style.display='none';
+  showChordStrip(showChords);
   setAlgo('wsola-musique');
   if(abuf){
     if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }

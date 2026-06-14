@@ -394,12 +394,10 @@ async function analyze(job){
       if(isFullView()) runKeyDetection();
       makeChords();
       drawCurveMusic(H);
-      showChordStrip(showChords);
       drawChords();
     } else {
       makeCurve && (pitchAlgo==='amdf' ? makeCurveAMDF() : pitchAlgo==='yin' ? makeCurveYIN() : makeCurve());
       drawCurve(H);
-      showChordStrip(false);
     }
     if(!(multiPitch || pitchAlgo==='multi') && isFullView()) runKeyDetection();
     if(stretchMode==='voix'){ makeFormants(); drawFormants(H); }
@@ -938,9 +936,12 @@ function drawChords() {
 }
 
 function showChordStrip(visible) {
-  $('chordStrip').style.display = visible ? 'flex' : 'none';
-  document.querySelector('.viz').style.marginBottom = visible ? '0' : '';
-  document.querySelector('.viz').style.borderRadius = visible ? '10px 10px 0 0' : '';
+  // La barre suit showChords ET le paramètre visible (mode musique actif)
+  const stripVisible = visible && showChords;
+  $('chordStrip').style.display = stripVisible ? 'flex' : 'none';
+  document.querySelector('.viz').style.marginBottom = stripVisible ? '0' : '';
+  document.querySelector('.viz').style.borderRadius = stripVisible ? '10px 10px 0 0' : '';
+  // Le toggle lui-même est visible dès qu'on est en mode musique, indépendamment de showChords
   $('chordToggleLabel').style.display = visible ? '' : 'none';
   $('chtg').style.display = visible ? '' : 'none';
 }
@@ -1033,7 +1034,7 @@ function applyDetectedKey(key) {
   detectedKey = key;
   keyNames = KEY_NOTE_NAMES[key] || null;
   const badge = $('keyBadge');
-  if(key && keyEnabled){
+  if(key && keyEnabled && showChords){
     badge.textContent = '♩ ' + key;
     badge.style.display = 'block';
     badge.style.opacity = '1';
@@ -1660,7 +1661,7 @@ function autoDetectMode(){
     setScaleLog(true); setMultiPitch(true); setPitchAlgo('multi');
     setAlgo('wsola-musique');
     $('rowFormants').style.display='none';
-    showChordStrip(showChords);
+    showChordStrip(true);
   } else {
     ymin.value=80; ymax.value=8000; applyAxis();
     pmin.value=80; pmax.value=1100;
@@ -2507,8 +2508,15 @@ ntg.addEventListener('click',()=>{
 });
 $('chtg').addEventListener('click',()=>{
   showChords=!showChords; $('chtg').classList.toggle('on',showChords);
-  showChordStrip(showChords);
-  if(showChords) drawChords();
+  showChordStrip(true);  // mode musique actif, showChords vient d'être mis à jour
+  const badge = $('keyBadge');
+  if(!showChords){ badge.style.display='none'; }
+  else if(detectedKey && keyEnabled){ badge.textContent='♩ '+detectedKey; badge.style.display='block'; }
+  if(!drawn) return;
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  const wasPlaying = playing;
+  const job = ++busy;
+  analyze(job).then(()=>{ afterAnalyze(job, wasPlaying, snap); });
 });
 $('keyBadge').addEventListener('click', ()=>{
   keyEnabled = !keyEnabled;
@@ -2659,7 +2667,7 @@ document.getElementById('modeMusique').addEventListener('click',async()=>{
   showNotes=true; ntg.classList.add('on');
   showP=true; ptg.classList.add('on');
   $('rowFormants').style.display='none';
-  showChordStrip(showChords);
+  showChordStrip(true);
   setAlgo('wsola-musique');
   if(abuf){
     if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }

@@ -2487,12 +2487,49 @@ pr.addEventListener('input',e=>{
   drawPlayhead(offset); if(w)play();
 });
 document.querySelectorAll('.sb').forEach(b=>b.addEventListener('click',async()=>{
-  const w=playing;
-  if(w) pause();
-  speed=parseFloat(b.dataset.s);
+  const wasPlaying = playing;
+  const oldSpeed = speed;
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  speed = parseFloat(b.dataset.s);
   document.querySelectorAll('.sb').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  await tick(0);
-  if(w) await play();  // getPlayBuffer sera appelé dans play() si nécessaire
+
+  if(!wasPlaying){
+    // Pas de lecture en cours — préparation silencieuse, pas de switch à faire
+    await getPlayBuffer(speed, true);
+    return;
+  }
+
+  // Lecture en cours : préparer le nouveau buffer sans couper
+  const newBuf = await getPlayBuffer(speed);
+  if(!newBuf) return;  // annulé
+
+  // Calculer la position réelle au moment du switch
+  let livePos = snap.offset0 + (actx.currentTime - snap.t0_0) * oldSpeed;
+  // Appliquer modulo boucle avec les bornes d'origine
+  if(looping){
+    const oldWin = snap.ve0 - snap.vs0;
+    if(oldWin > 0){
+      while(livePos >= snap.ve0) livePos -= oldWin;
+      while(livePos <  snap.vs0) livePos += oldWin;
+    }
+  }
+  livePos = Math.max(viewStart, Math.min(viewEnd, livePos));
+
+  // Switch atomique : arrêter l'ancien src, démarrer le nouveau
+  stopSrc();
+  playBuf = newBuf;
+  src = actx.createBufferSource();
+  src.buffer = playBuf;
+  src.playbackRate.value = 1;
+  src.connect(actx.destination);
+  src.loop = true;
+  src.loopStart = viewStart / speed;
+  src.loopEnd   = viewEnd   / speed;
+  offset = livePos;
+  t0 = actx.currentTime;
+  src.start(0, offset / speed);
+  src.onended = ()=>{ if(playing){ stopAll(); } };
+  // loop() continue — playing est toujours true
 }));
 ptg.addEventListener('click',()=>{
   showP=!showP; ptg.classList.toggle('on',showP);
@@ -2593,12 +2630,48 @@ function setAlgo(algo){
   document.getElementById('algoWsolaMusique').classList.toggle('on',algo==='wsola-musique');
   document.getElementById('algoPV').classList.toggle('on',          algo==='pv');
 }
+// Prépare le nouveau buffer (algo/mode/stéréo changé) sans couper la lecture,
+// puis fait un switch atomique. oldSpeed = vitesse en cours au moment du clic.
+async function switchPlayBuffer(oldSpeed){
+  if(!abuf || speed >= 1) return;  // à ×1 abuf est joué directement, rien à faire
+  if(!playing){
+    await getPlayBuffer(speed, true);  // pré-chauffer le cache en silence
+    return;
+  }
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  const newBuf = await getPlayBuffer(speed);
+  if(!newBuf) return;  // annulé
+
+  let livePos = snap.offset0 + (actx.currentTime - snap.t0_0) * oldSpeed;
+  if(looping){
+    const oldWin = snap.ve0 - snap.vs0;
+    if(oldWin > 0){
+      while(livePos >= snap.ve0) livePos -= oldWin;
+      while(livePos <  snap.vs0) livePos += oldWin;
+    }
+  }
+  livePos = Math.max(viewStart, Math.min(viewEnd, livePos));
+
+  stopSrc();
+  playBuf = newBuf;
+  src = actx.createBufferSource();
+  src.buffer = playBuf;
+  src.playbackRate.value = 1;
+  src.connect(actx.destination);
+  src.loop = true;
+  src.loopStart = viewStart / speed;
+  src.loopEnd   = viewEnd   / speed;
+  offset = livePos;
+  t0 = actx.currentTime;
+  src.start(0, offset / speed);
+  src.onended = ()=>{ if(playing){ stopAll(); } };
+}
+
 async function setAlgoAndReload(algo){
+  const oldSpeed = speed;
   setAlgo(algo);
-  if(!abuf || speed >= 1 || !playing) return;
-  pause();
-  await getPlayBuffer(speed);
-  play();
+  if(!abuf || !drawn) return;
+  await switchPlayBuffer(oldSpeed);
 }
 const stereoBtn = $('stereoBtn');
 stereoBtn.addEventListener('click', async ()=>{
@@ -2606,11 +2679,10 @@ stereoBtn.addEventListener('click', async ()=>{
   stereoBtn.textContent = stereo ? 'Stéréo' : 'Mono';
   stereoBtn.style.borderColor = stereo ? 'var(--acc)' : 'var(--bdr)';
   stereoBtn.style.color = stereo ? 'var(--acc)' : 'var(--mut)';
+  const oldSpeed = speed;
   clearStretchCache();
-  if(!abuf || speed >= 1 || !playing) return;
-  pause();
-  await getPlayBuffer(speed);
-  play();
+  if(!abuf || !drawn) return;
+  await switchPlayBuffer(oldSpeed);
 });
 document.getElementById('algoWsolaOiseau').addEventListener('click', ()=> setAlgoAndReload('wsola-oiseau'));
 document.getElementById('algoWsolaVoix').addEventListener('click',   ()=> setAlgoAndReload('wsola-voix'));
@@ -2632,7 +2704,8 @@ document.getElementById('modeOiseau').addEventListener('click',async()=>{
   showChordStrip(false);
   setAlgo('wsola-oiseau');
   if(abuf){
-    if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }
+    const oldSpeed = speed;
+    if(speed < 1 && drawn) await switchPlayBuffer(oldSpeed);
     if(drawn) await analyze(busy);
   }
 });
@@ -2651,7 +2724,8 @@ document.getElementById('modeVoix').addEventListener('click',async()=>{
   showChordStrip(false);
   setAlgo('pv');
   if(abuf){
-    if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }
+    const oldSpeed = speed;
+    if(speed < 1 && drawn) await switchPlayBuffer(oldSpeed);
     if(drawn) await analyze(busy);
   }
 });
@@ -2670,7 +2744,8 @@ document.getElementById('modeMusique').addEventListener('click',async()=>{
   showChordStrip(true);
   setAlgo('wsola-musique');
   if(abuf){
-    if(speed < 1 && drawn && playing){ pause(); await getPlayBuffer(speed); play(); }
+    const oldSpeed = speed;
+    if(speed < 1 && drawn) await switchPlayBuffer(oldSpeed);
     if(drawn) await analyze(busy);
   }
 });
@@ -2821,7 +2896,7 @@ function selEnd(e){
 }
 // Appelé après toute ré-analyse suite à un zoom/dézoom/pan/glissement.
 // Recadre offset, met à jour l'UI, relance la lecture si elle était active.
-function afterAnalyze(job, wasPlaying, snap){
+async function afterAnalyze(job, wasPlaying, snap){
   if(job !== busy) return;
   // snap = {offset0, t0_0, vs0, ve0} capturés AVANT tout changement de vue
   // On recalcule la position exacte ICI, après l'analyse, depuis l'horloge audio
@@ -2861,11 +2936,19 @@ function afterAnalyze(job, wasPlaying, snap){
   pf.style.width = (r * 100) + '%'; pr.value = Math.round(r * 1000);
   td.textContent = fmt(offset) + ' / ' + fmt(viewEnd);
   timeLabels();
-  ph.style.display = 'block'; drawPlayhead(offset);
 
   if(wasPlaying){
-    if(!playing)        { play(); }
-    else if(outOfView)  { pause(); play(); }
+    if(!playing){
+      offset = outOfView ? viewStart : livePos;
+      await play();
+    } else if(outOfView){
+      pause();
+      offset = viewStart;
+      await play();
+    }
+    // curseur géré par loop()
+  } else {
+    ph.style.display = 'block'; drawPlayhead(offset);
   }
 }
 function setZoomBadge(on){
@@ -2902,14 +2985,12 @@ function zoomOutStep(){
   const newHalf = (viewEnd - viewStart) * FACTOR / 2;
   let ns = center - newHalf;
   let ne = center + newHalf;
-  // Limiter aux bornes du fichier
   if(ns < 0){ ne = Math.min(dur, ne - ns); ns = 0; }
   if(ne > dur){ ns = Math.max(0, ns - (ne - dur)); ne = dur; }
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
   viewStart = Math.max(0, ns);
   viewEnd   = Math.min(dur, ne);
-  // Si on couvre tout le fichier → quitter le zoom
   if(viewStart <= 0 && viewEnd >= dur){ exitZoom(); return; }
-  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
   setZoomBadge(true);
   updatePanButtons();
   const wasPlaying = playing;
@@ -2927,8 +3008,8 @@ function panView(dir){
   let ne = viewEnd   + dir*step;
   if(ns < 0){ ne -= ns; ns = 0; }
   if(ne > dur){ ns -= (ne-dur); ne = dur; }
-  viewStart = Math.max(0,ns); viewEnd = Math.min(dur,ne);
   const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  viewStart = Math.max(0,ns); viewEnd = Math.min(dur,ne);
   setZoomBadge(true);
   updatePanButtons();
   const wasPlaying = playing;

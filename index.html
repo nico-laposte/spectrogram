@@ -470,7 +470,7 @@ function makeCurveAMDF(){
   const lagMin = Math.floor(sr / p2);
   const lagMax = Math.ceil(sr / p1);
   const frameSize = lagMax * 2;  // fenêtre temporelle = 2× période max
-  const vs = Math.floor(viewStart * abuf.duration > 0 ? viewStart * sr : 0);
+  const vs = Math.floor(viewStart > 0 ? viewStart * sr : 0);
   const ve = Math.min(total, Math.floor(viewEnd * sr));
   const span = Math.max(frameSize + 1, ve - vs);
   const gMaxRef = (specFull && specFull.gMaxHi) ? specFull.gMaxHi : spec.gMax;
@@ -545,7 +545,7 @@ function makeCurveYIN(){
     let runSum = 0;
     for(let lag = 1; lag <= lagMax; lag++){
       runSum += d[lag];
-      dn[lag] = runSum > 0 ? d[lag] * lag / runSum : 1;
+      dn[lag] = runSum > 1e-12 ? d[lag] * lag / runSum : 1;
     }
 
     // Étape 3 : chercher le premier minimum sous le seuil
@@ -1039,7 +1039,7 @@ function autoDetectMode(){
     }
   }
 
-  if(frameCount===0) return;
+  if(frameCount===0){ _detectingMode=false; return; }
 
   const avgCentroid = centroidSum/frameCount;
   const birdRatio   = birdEnergy  / (totalEnergy||1);
@@ -1054,11 +1054,33 @@ function autoDetectMode(){
     detectedMode = 'musique';
   }
 
-  if(detectedMode === stretchMode){ _detectingMode=false; return; }
-  // Ne pas redéclencher analyze si le fichier vient d'être chargé (drawn=false)
-  // L'analyze initial de load() s'en chargera
-  _detectingMode = true;  // garder le flag actif pendant le click
-  $('mode'+detectedMode.charAt(0).toUpperCase()+detectedMode.slice(1)).click();
+  if(detectedMode === stretchMode && document.getElementById('mode'+detectedMode.charAt(0).toUpperCase()+detectedMode.slice(1)).classList.contains('on')){
+    _detectingMode=false; return;
+  }
+  stretchMode = detectedMode;
+  // Appliquer directement sans .click() pour éviter les problèmes de disabled/timing
+  document.querySelectorAll('#modeSbs .mdb').forEach(b=>b.classList.remove('on'));
+  document.getElementById('mode'+detectedMode.charAt(0).toUpperCase()+detectedMode.slice(1)).classList.add('on');
+  if(detectedMode==='oiseau'){
+    ymin.value=80; ymax.value=8000; applyAxis();
+    pmin.value=1000; pmax.value=8000;
+    showNotes=true; ntg.classList.add('on');
+    setScaleLog(false); setMultiPitch(false); setPitchAlgo('peak');
+    setAlgo('wsola-oiseau');
+  } else if(detectedMode==='musique'){
+    ymin.value=80; ymax.value=1600; applyAxis();
+    pmin.value=80; pmax.value=1200;
+    showNotes=true; ntg.classList.add('on');
+    showP=true; ptg.classList.add('on');
+    setScaleLog(true); setMultiPitch(true); setPitchAlgo('multi');
+    setAlgo('wsola-musique');
+  } else {
+    ymin.value=80; ymax.value=8000; applyAxis();
+    pmin.value=80; pmax.value=1100;
+    showNotes=false; ntg.classList.remove('on');
+    setScaleLog(true); setMultiPitch(false); setPitchAlgo('peak');
+    setAlgo('pv');
+  }
   _detectingMode = false;
 }
 
@@ -1997,7 +2019,7 @@ document.getElementById('modeMusique').addEventListener('click',async()=>{
   stretchMode='musique';
   ymin.value=80; ymax.value=1600; applyAxis();
   pmin.value=80; pmax.value=1200;
-  setScaleLog(false); setMultiPitch(true); setPitchAlgo('multi');
+  setScaleLog(true); setMultiPitch(true); setPitchAlgo('multi');
   document.getElementById('modeMusique').classList.add('on');
   document.getElementById('modeOiseau').classList.remove('on');
   document.getElementById('modeVoix').classList.remove('on');

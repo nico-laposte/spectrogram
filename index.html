@@ -74,8 +74,9 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 #zoomBadge.on{display:flex}
 #zoomTxt{font-size:10px;color:var(--acc2);white-space:nowrap}
 #zoomExit{width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:var(--acc2);color:#0a0f0a;border:none;border-radius:50%;font-family:'DM Mono',monospace;font-size:12px;line-height:1;padding:0}
-#panLeft,#panRight,#zoomOut{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(240,200,74,.15);border:1px solid var(--acc2);border-radius:6px;color:var(--acc2);font-size:13px;padding:0;cursor:pointer}
-#panLeft:disabled,#panRight:disabled{opacity:.25;cursor:default}
+#panLeft,#panRight,#zoomOut,#zoomBack,#phraseLeft,#phraseRight{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(240,200,74,.15);border:1px solid var(--acc2);border-radius:6px;color:var(--acc2);font-size:13px;padding:0;cursor:pointer}
+#zoomBack:disabled,#panLeft:disabled,#panRight:disabled,#phraseLeft:disabled,#phraseRight:disabled{opacity:.25;cursor:default}
+#phc{pointer-events:none;z-index:2}
 .viz.zoomed{border-color:var(--acc2);box-shadow:inset 0 0 0 1px rgba(240,200,74,.4)}
 .pl{width:36px;height:20px;background:var(--bdr);border-radius:10px;position:relative;border:none;flex-shrink:0;transition:background .2s}
 .pl.on{background:rgba(240,200,74,.3)}
@@ -119,8 +120,14 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
       <span id="zoomTxt"></span>
       <button id="panRight" aria-label="Décaler droite">▶</button>
       <button id="zoomOut" aria-label="Dézoomer">−</button>
+      <button id="zoomBack" aria-label="Vue précédente" title="Vue précédente">↩</button>
+      <span id="phraseSep" style="display:none;width:1px;height:18px;background:rgba(240,200,74,.3)"></span>
+      <button id="phraseLeft"  aria-label="Phrase précédente" title="Phrase précédente" style="display:none">«</button>
+      <span id="phraseTxt" style="display:none;font-size:10px;color:var(--acc2);white-space:nowrap"></span>
+      <button id="phraseRight" aria-label="Phrase suivante"   title="Phrase suivante"  style="display:none">»</button>
       <button id="zoomExit" aria-label="Vue complète">✕</button>
     </div>
+    <canvas id="phc"></canvas>
     <div class="em" id="em">
       <svg width="36" height="36" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.2">
         <circle cx="20" cy="20" r="14"/><path d="M15 16c0-2.8 2.2-5 5-5s5 2.2 5 5v6" stroke-linecap="round"/><circle cx="20" cy="25" r="2" fill="currentColor"/>
@@ -201,6 +208,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
         <button class="pl on" id="ntg"></button>
         <div class="rl" id="chordToggleLabel" style="min-width:0;margin-left:14px;display:none">Accords</div>
         <button class="pl on" id="chtg" style="display:none"></button>
+        <div class="rl" id="phraseToggleLabel" style="min-width:0;margin-left:14px;display:none">Phrases</div>
+        <button class="pl" id="phtg" style="display:none"></button>
       </div>
       <div class="row" id="rowFormants" style="display:none">
         <div class="rl">F1 F2</div>
@@ -221,14 +230,17 @@ let actx, abuf, src, dur=0, speed=1, offset=0, t0=0;
 
 // L'AudioContext est créé à la demande dans playPianoNote ou load()
 
-let playing=false, showP=true, showNotes=true, showFormants=false, busy=0, drawn=false, raf;
+let playing=false, showP=true, showNotes=true, showFormants=false, showChords=true, showPhrases=false, busy=0, drawn=false, raf;
 let currentPlayPos=0;  // position réelle mise à jour à chaque frame par loop()
 let curve=[], spec=null;
 let formants=[];  // [{t, f1, f2}] ou null par frame
 let curveFull=[];  // courbe de pitch haute résolution sur tout le fichier
 // Fenêtre visible (zoom) en secondes + mode boucle + sélection en cours
 let viewStart=0, viewEnd=0, looping=true;
+let zoomHistory = [];  // pile de {vs, ve} — vue précédente
 function isFullView(){ return !abuf || (viewStart===0 && Math.abs(viewEnd - abuf.duration) < 0.01); }
+function pushView(){ zoomHistory.push({vs: viewStart, ve: viewEnd}); updateZoomBack(); }
+function updateZoomBack(){ const btn=$('zoomBack'); if(btn) btn.disabled = zoomHistory.length === 0; }
 let selX0=null, selX1=null, selecting=false, draggingPH=false, draggingPHWasPlaying=false;
 let sliding=false, slideStartX=0, slideStartVS=0, slideStartVE=0, slideTimer=null;
 let slideCurveSnapshot=[], slideVSSnapshot=0, slideVESnapshot=0, slideMinLen=1;
@@ -281,14 +293,19 @@ async function load(source){
 
   dur = abuf.duration;
   viewStart = 0; viewEnd = dur; offset = 0;
+  zoomHistory = [];
+  setZoomBadge(false);
+  showPhrases = false;
+  $('phtg').classList.remove('on');
+  phrases = []; phraseIdx = -1;
   clearStretchCache();
-  specFull = null;  // libérer l'ancien spectrogramme basse résolution
+  specFull = null;
+  gMaxHiGlobal = 0;
   // Arrêter l'oscillateur piano s'il tourne encore
   if(typeof pianoOsc !== 'undefined' && pianoOsc){
     try{ pianoOsc.stop(); pianoOsc.disconnect(); }catch(e){}
     pianoOsc = null;
   }
-  setZoomBadge(false);
 
   ilbl.textContent = name;
   iz.classList.add('has');
@@ -298,9 +315,9 @@ async function load(source){
   em.style.display='none';
   pb.disabled=false; rwb.disabled=false;
 
-  // Calculer le spectrogramme basse résolution de façon asynchrone (ne bloque pas)
-  // autoDetectMode sera appelé à la fin de computeSpecFull quand specFull est prêt
-  computeSpecFull().catch(e=>console.warn('specFull:', e));
+  // computeSpecFull appelle autoDetectMode() qui pose ymax/MFREQ/mode
+  // Il faut l'attendre avant analyze() pour que le premier tracé soit correct
+  await computeSpecFull().catch(e=>console.warn('specFull:', e));
 
   await analyze(job);
 }
@@ -355,6 +372,7 @@ async function analyze(job){
   const W = sc.parentElement.clientWidth||320;
   const H = sc.parentElement.clientHeight||200;
   sc.width=W; sc.height=H; pc.width=W; pc.height=H; fc.width=W; fc.height=H;
+  const phc=$('phc'); phc.width=W; phc.height=H;
 
   const sr   = abuf.sampleRate;
   const data = monoMix(abuf);
@@ -402,6 +420,8 @@ async function analyze(job){
     if(!(multiPitch || pitchAlgo==='multi') && isFullView()) runKeyDetection();
     if(stretchMode==='voix'){ makeFormants(); drawFormants(H); }
     else { formants=[]; fc.width=fc.width; }  // effacer si autre mode
+    drawPhrases();
+    updatePhraseNav();
     freqLabels();
     timeLabels();
   }catch(err){ console.error('draw error:', err); }
@@ -496,7 +516,7 @@ function makeCurveAMDF(){
   const vs = Math.floor(viewStart > 0 ? viewStart * sr : 0);
   const ve = Math.min(total, Math.floor(viewEnd * sr));
   const span = Math.max(frameSize + 1, ve - vs);
-  const gMaxRef = (specFull && specFull.gMaxHi) ? specFull.gMaxHi : spec.gMax;
+  const gMaxRef = gMaxHiGlobal || spec.gMax;
 
   curve = [];
   for(let c = 0; c < cols; c++){
@@ -603,7 +623,7 @@ function makeCurve(){
   const {out,cols,maxBin}=spec;
   // Utiliser le gMax global (specFull) comme référence stable — évite que le seuil
   // change selon la région affichée (sinon plus de points apparaissent sur les régions calmes)
-  const gMaxRef = (specFull && specFull.gMaxHi) ? specFull.gMaxHi : spec.gMax;
+  const gMaxRef = gMaxHiGlobal || spec.gMax;
   const p1=parseInt(pmin.value)||1000, p2=parseInt(pmax.value)||8000;
   const b1=Math.floor(p1/MFREQ*maxBin), b2=Math.ceil(p2/MFREQ*maxBin);
   curve=[];
@@ -636,7 +656,7 @@ function makeCurveMusic(){
 
   const MAX_VOICES = 6;
   const HARM_TOL   = 0.015;
-  const gMaxRef = (specFull && specFull.gMaxHi) ? specFull.gMaxHi : spec.gMax;
+  const gMaxRef = gMaxHiGlobal || spec.gMax;
   const THRESH  = gMaxRef * 0.02;
   const b1 = Math.floor(80   / MFREQ * maxBinM);
   const b2 = Math.ceil(4200  / MFREQ * maxBinM);
@@ -788,7 +808,6 @@ const CHORD_TYPES = [
 ];
 
 let chords = [];      // [{t0,t1,label}]  — segments d'accords
-let showChords = true;
 
 // Nom de note pour une classe de hauteur, en respectant la tonalité
 function pcToName(pc) {
@@ -1049,6 +1068,160 @@ function runKeyDetection() {
   const key = detectKey(w);
   applyDetectedKey(key);
 }
+
+// ── DÉTECTION DE PHRASES (mode oiseau) ──────────────────────────────────
+let phrases      = [];   // [{t0, t1}, …] en secondes
+let phraseIdx    = -1;   // index de la phrase zoomée (-1 = aucune)
+
+// Palette de couleurs pour les phrases (teintes distinctes, semi-transparentes)
+const PHRASE_COLORS = [
+  'rgba(74,200,240,.28)',   // cyan
+  'rgba(180,100,255,.28)',  // violet
+  'rgba(74,240,140,.28)',   // vert
+  'rgba(240,180,74,.28)',   // orange
+  'rgba(240,74,120,.28)',   // rose
+  'rgba(74,160,240,.28)',   // bleu
+];
+
+function detectPhrases(){
+  phrases = []; phraseIdx = -1;
+  if(!specFull) return;
+  const {out, cols, maxBin, dur: totalDur} = specFull;
+
+  // 1. Énergie par colonne (RMS des bins)
+  const energy = new Float32Array(cols);
+  for(let c=0; c<cols; c++){
+    const off = c * maxBin;
+    let s = 0;
+    for(let b=0; b<maxBin; b++) s += out[off+b] * out[off+b];
+    energy[c] = Math.sqrt(s / maxBin);
+  }
+
+  // 2. Lissage (fenêtre glissante de 5 colonnes)
+  const smooth = new Float32Array(cols);
+  const WIN = 5;
+  for(let c=0; c<cols; c++){
+    let sum=0, n=0;
+    for(let k=Math.max(0,c-WIN); k<=Math.min(cols-1,c+WIN); k++){ sum+=energy[k]; n++; }
+    smooth[c] = sum/n;
+  }
+
+  // 3. Seuil global p10/p90
+  const sorted = Float32Array.from(smooth).sort();
+  const p10 = sorted[Math.floor(cols * 0.10)];
+  const p90 = sorted[Math.floor(cols * 0.90)];
+  const THRESH = p10 + (p90 - p10) * 0.55;
+  // Log énergie zone 22-26s
+  const c22=Math.floor(22/totalDur*cols), c26=Math.floor(26/totalDur*cols);
+  const zone=Array.from(smooth.slice(c22,c26));
+  console.log('[phrases] THRESH=',THRESH.toFixed(5),' zone 22-26s max=',Math.max(...zone).toFixed(5));
+
+  // 4. Segmentation : colonnes actives → intervalles temporels
+  const colDur = totalDur / cols;
+  const MIN_DUR  = 0.30;   // phrase min 300 ms
+  const MIN_GAP  = 0.45;   // silence min 450 ms
+  const MARGIN   = 0.05;
+
+  const raw = [];
+  let inPhrase = false, t0 = 0;
+  for(let c=0; c<cols; c++){
+    const t = c * colDur;
+    if(!inPhrase && smooth[c] > THRESH){ inPhrase=true; t0=t; }
+    if(inPhrase && smooth[c] <= THRESH){ inPhrase=false; raw.push({t0, t1:t}); }
+  }
+  if(inPhrase) raw.push({t0, t1: totalDur});
+
+  // 5. Fusionner les silences courts, éliminer les phrases trop courtes
+  const merged = [];
+  for(const seg of raw){
+    if(seg.t1 - seg.t0 < MIN_DUR) continue;
+    if(merged.length && seg.t0 - merged[merged.length-1].t1 < MIN_GAP){
+      merged[merged.length-1].t1 = seg.t1;
+    } else {
+      merged.push({...seg});
+    }
+  }
+  phrases = merged.filter(s => s.t1 - s.t0 >= MIN_DUR);
+  console.log('[phrases]', phrases.length, phrases.map(p=>p.t0.toFixed(2)+'-'+p.t1.toFixed(2)).join(', '));
+  phrases._margin = MARGIN;
+}
+
+function drawPhrases(){
+  const phc = $('phc');
+  if(!phc) return;
+  const W = phc.width, H = phc.height;
+  const ctx = phc.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  if(!showPhrases || !phrases.length || stretchMode !== 'oiseau') return;
+
+  for(let i=0; i<phrases.length; i++){
+    const {t0, t1} = phrases[i];
+    // Projeter sur la vue courante
+    const winLen = viewEnd - viewStart;
+    const x0 = Math.max(0, (t0 - viewStart) / winLen * W);
+    const x1 = Math.min(W, (t1 - viewStart) / winLen * W);
+    if(x1 <= x0) continue;
+    const color = 'rgba(74,200,240,.25)';
+
+    // Fond de la phrase
+    ctx.fillStyle = i === phraseIdx ? 'rgba(74,200,240,.42)' : 'rgba(74,200,240,.18)';
+    ctx.fillRect(x0, 0, x1-x0, H);
+
+    // Bordures verticales
+    const borderColor = i === phraseIdx ? 'rgba(74,200,240,.9)' : 'rgba(74,200,240,.6)';
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = i === phraseIdx ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(x0,0); ctx.lineTo(x0,H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x1,0); ctx.lineTo(x1,H); ctx.stroke();
+
+    // Numéro de phrase
+    if(x1-x0 > 18){
+      ctx.font = `${i===phraseIdx?'700':'500'} 9px "DM Mono",monospace`;
+      ctx.fillStyle = borderColor;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(i+1, (x0+x1)/2, 3);
+    }
+  }
+}
+
+function updatePhraseNav(){
+  const show = showPhrases && stretchMode === 'oiseau' && phrases.length > 0;
+  $('phraseSep').style.display   = show ? 'block' : 'none';
+  $('phraseLeft').style.display  = show ? '' : 'none';
+  $('phraseTxt').style.display   = show ? '' : 'none';
+  $('phraseRight').style.display = show ? '' : 'none';
+  if(!show) return;
+  $('phraseTxt').textContent = phraseIdx >= 0
+    ? `${phraseIdx+1}/${phrases.length}`
+    : `·/${phrases.length}`;
+  $('phraseLeft').disabled  = phraseIdx <= 0;
+  $('phraseRight').disabled = phraseIdx >= phrases.length - 1;
+}
+
+function goToPhrase(idx){
+  if(idx < 0 || idx >= phrases.length) return;
+  phraseIdx = idx;
+  const {t0, t1} = phrases[idx];
+  const margin = Math.max(0.1, (t1-t0) * 0.08);
+  const vs = Math.max(0, t0 - margin);
+  const ve = Math.min(dur, t1 + margin);
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  const wasPlaying = playing;
+  pushView();
+  viewStart = vs; viewEnd = ve;
+  setZoomBadge(true);
+  updatePhraseNav();
+  drawPhrases();
+  ph.style.display = 'none';
+  const job = busy;
+  analyze(job).then(()=>{ afterAnalyze(job, wasPlaying, snap); });
+}
+
+$('phraseLeft').addEventListener('click',  e=>{ e.stopPropagation(); goToPhrase(phraseIdx - 1); });
+$('phraseLeft').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); goToPhrase(phraseIdx - 1); });
+$('phraseRight').addEventListener('click', e=>{ e.stopPropagation(); goToPhrase(phraseIdx + 1); });
+$('phraseRight').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); goToPhrase(phraseIdx + 1); });
 
 function hzToNote(hz){
   if(!hz||hz<=0) return null;
@@ -1423,6 +1596,27 @@ function color(t){
 // Cache des buffers ralentis par vitesse. ×1 = abuf direct (pas de traitement).
 let stretchCache = {};        // { "0.5": AudioBuffer, ... }
 let specFull = null;          // spectrogramme basse résolution du fichier entier
+let gMaxHiGlobal = 0;         // normalisation stable calculée dès le chargement
+
+async function computeGMaxHi(){
+  if(!abuf) return;
+  const FFTN_HI = 2048;
+  const data = monoMix(abuf);
+  const sr = abuf.sampleRate;
+  const total = data.length;
+  const binsHi = FFTN_HI / 2;
+  const maxBinHi = Math.min(binsHi-1, Math.floor(MFREQ/(sr/2)*binsHi));
+  const winHi = hann(FFTN_HI);
+  let g = 0;
+  const COLS_SCAN = 50;
+  for(let c=0; c<COLS_SCAN; c++){
+    if(c % 10 === 0) await tick(1);
+    const start = Math.floor(c / COLS_SCAN * (total - FFTN_HI));
+    const m = fftMag(data, start, FFTN_HI, winHi, maxBinHi);
+    for(let b=0; b<maxBinHi; b++) if(m[b]>g) g=m[b];
+  }
+  gMaxHiGlobal = g;
+}
 let playBuf = null;           // buffer actuellement joué (abuf ou version étirée)
 let stretchMode = 'oiseau';   // 'oiseau' | 'voix' | 'musique'
 let logScale  = false;        // true = axe Y logarithmique
@@ -1653,6 +1847,8 @@ function autoDetectMode(){
     setAlgo('wsola-oiseau');
     $('rowFormants').style.display='none';
     showChordStrip(false);
+    $('phraseToggleLabel').style.display=''; $('phtg').style.display='';
+    detectPhrases();
   } else if(detectedMode==='musique'){
     ymin.value=80; ymax.value=1600; applyAxis();
     pmin.value=80; pmax.value=1200;
@@ -1662,6 +1858,7 @@ function autoDetectMode(){
     setAlgo('wsola-musique');
     $('rowFormants').style.display='none';
     showChordStrip(true);
+    $('phraseToggleLabel').style.display='none'; $('phtg').style.display='none';
   } else {
     ymin.value=80; ymax.value=8000; applyAxis();
     pmin.value=80; pmax.value=1100;
@@ -1670,6 +1867,7 @@ function autoDetectMode(){
     setAlgo('pv');
     $('rowFormants').style.display='flex';
     showChordStrip(false);
+    $('phraseToggleLabel').style.display='none'; $('phtg').style.display='none';
   }
   _detectingMode = false;
 }
@@ -2150,6 +2348,7 @@ async function timeStretchSyncAsync(samples, mode, factor, pctMin=0, pctMax=95){
       if(frameCount%50===0){
         setOv(true, undefined, Math.round(pctMin + (pctMax-pctMin)*frameCount/totalFrames));
         await tick(0);
+        if(_stretchCancelled) return null;
       }
     }
     for(let i=0;i<outLen;i++) if(winSum[i]>1e-6) out[i]/=winSum[i];
@@ -2192,6 +2391,7 @@ async function timeStretchSyncAsync(samples, mode, factor, pctMin=0, pctMax=95){
       if(frameCount%200===0){
         setOv(true, undefined, Math.round(pctMin + (pctMax-pctMin)*frameCount/totalFrames));
         await tick(0);
+        if(_stretchCancelled) return null;
       }
     }
     for(let i=0;i<outputLength;i++) if(weight[i]>1e-12) output[i]/=weight[i];
@@ -2208,6 +2408,7 @@ async function getPlayBuffer(spd, silent=false){
   if(Math.abs(spd-1)<0.001) return abuf;
   const key=stretchMode+':'+stretchAlgo+':'+(stereo?'s':'m')+':'+String(spd);
   if(stretchCache[key]) return stretchCache[key];
+  _stretchCancelled = false;
   if(!silent){
     _lastOvPct = 0;
     setOv(true,'Préparation ×'+spd+'…',0);
@@ -2268,9 +2469,9 @@ async function getPlayBuffer(spd, silent=false){
     // Utiliser le fallback async pour les deux canaux — le Worker ne peut pas
     // être appelé deux fois de suite avec des buffers transférés
     const strL = await timeStretchSyncAsync(left,  algoMode, factor, 0,  50);
-    if(!strL){ cancelBtn.style.display='none'; if(!silent) setOv(false); return abuf; }
+    if(!strL || _stretchCancelled){ cancelBtn.style.display='none'; if(!silent) setOv(false); return null; }
     const strR = await timeStretchSyncAsync(right, algoMode, factor, 50, 100);
-    if(!strR){ cancelBtn.style.display='none'; if(!silent) setOv(false); return abuf; }
+    if(!strR || _stretchCancelled){ cancelBtn.style.display='none'; if(!silent) setOv(false); return null; }
     buf = actx.createBuffer(2, strL.length, abuf.sampleRate);
     buf.getChannelData(0).set(strL);
     buf.getChannelData(1).set(strR);
@@ -2461,14 +2662,23 @@ $('settingsBtn').disabled = true;
 $('settingsBtn').style.opacity = '0.35';
 let _cancelPrep = false;
 let _cancelReject = null;
+let _stretchCancelled = false;
 cancelBtn.addEventListener('click', ()=>{
+  _stretchCancelled = true;
   if(stretchWorker){ stretchWorker.terminate(); stretchWorker=null; }
   if(_cancelReject){ _cancelReject(); _cancelReject=null; }
   cancelBtn.style.display='none';
   setOv(false);
+  const oldSpeed = speed;
   speed=1;
   document.querySelectorAll('.sb').forEach(x=>x.classList.remove('on'));
   document.querySelector('.sb[data-s="1"]').classList.add('on');
+  if(playing){
+    const pos = offset + (actx.currentTime - t0) * oldSpeed;
+    pause();
+    offset = Math.max(viewStart, Math.min(viewEnd, pos));
+    play();
+  }
 });
 cancelBtn.addEventListener('touchstart', e=>e.stopPropagation(), {passive:true});
 pb.addEventListener('click',()=>{ if(!abuf)return; playing?pause():play(); });
@@ -2572,6 +2782,12 @@ ftg.addEventListener('click',()=>{
   showFormants=!showFormants; ftg.classList.toggle('on',showFormants);
   if(!drawn) return;
   drawFormants(fc.height);
+});
+$('phtg').addEventListener('click',()=>{
+  showPhrases=!showPhrases; $('phtg').classList.toggle('on',showPhrases);
+  if(showPhrases && !phrases.length) detectPhrases();
+  updatePhraseNav();
+  if(drawn) drawPhrases();
 });
 $('vowelLangBtn').addEventListener('click',()=>{
   vowelLang = vowelLang === 'FR' ? 'JA' : 'FR';
@@ -2702,6 +2918,8 @@ document.getElementById('modeOiseau').addEventListener('click',async()=>{
   $('rowFormants').style.display='none';
   $('keyBadge').style.display='none';
   showChordStrip(false);
+  $('phraseToggleLabel').style.display=''; $('phtg').style.display='';
+  detectPhrases();
   setAlgo('wsola-oiseau');
   if(abuf){
     const oldSpeed = speed;
@@ -2722,6 +2940,7 @@ document.getElementById('modeVoix').addEventListener('click',async()=>{
   $('rowFormants').style.display='flex';
   $('keyBadge').style.display='none';
   showChordStrip(false);
+  $('phraseToggleLabel').style.display='none'; $('phtg').style.display='none';
   setAlgo('pv');
   if(abuf){
     const oldSpeed = speed;
@@ -2742,6 +2961,7 @@ document.getElementById('modeMusique').addEventListener('click',async()=>{
   showP=true; ptg.classList.add('on');
   $('rowFormants').style.display='none';
   showChordStrip(true);
+  $('phraseToggleLabel').style.display='none'; $('phtg').style.display='none';
   setAlgo('wsola-musique');
   if(abuf){
     const oldSpeed = speed;
@@ -2834,6 +3054,7 @@ function selMove(e){
     // Redessiner depuis specFull en temps réel
     drawSpecFromFull(viewStart, viewEnd);
     drawCurveFromFull(viewStart, viewEnd);
+    updatePanButtons();
     // Maintenir le curseur visible pendant le glissement
     if(!playing && offset >= viewStart && offset < viewEnd){
       ph.style.display='block';
@@ -2868,6 +3089,7 @@ function selEnd(e){
     if(wasPlaying) ph.style.display='none';  // loop() la remettra ; en pause on garde visible
 
     const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+    pushView();
     setZoomBadge(true);
     const job=busy;
     analyze(job).then(()=>{ afterAnalyze(job, wasPlaying, snap); });
@@ -2887,6 +3109,7 @@ function selEnd(e){
   const t0s=xToTime(a), t1s=xToTime(b);
   const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
   const wasPlaying = playing;
+  pushView();
   viewStart=t0s; viewEnd=t1s;
 
   setZoomBadge(true);
@@ -2955,6 +3178,7 @@ function setZoomBadge(on){
   zoomBadge.classList.toggle('on', on);
   viz.classList.toggle('zoomed', on);
   if(on){ zoomTxt.textContent = fmt(viewStart)+' → '+fmt(viewEnd); updatePanButtons(); }
+  updateZoomBack();
 }
 function updateSelUI(){
   const a=Math.min(selX0,selX1), b=Math.max(selX0,selX1);
@@ -2969,6 +3193,23 @@ window.addEventListener('mousemove',selMove);
 window.addEventListener('mouseup',  selEnd);
 zoomExit.addEventListener('click', e=>{ e.stopPropagation(); exitZoom(); });
 zoomExit.addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); exitZoom(); });
+
+function goBack(){
+  if(!abuf || zoomHistory.length === 0) return;
+  const prev = zoomHistory.pop();
+  const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  const wasPlaying = playing;
+  viewStart = prev.vs; viewEnd = prev.ve;
+  const isGeneral = viewStart <= 0 && viewEnd >= dur;
+  if(isGeneral) phraseIdx = -1;
+  isGeneral ? setZoomBadge(false) : setZoomBadge(true);
+  updateZoomBack();
+  ph.style.display = 'none';
+  const job = busy;
+  analyze(job).then(()=>{ afterAnalyze(job, wasPlaying, snap); });
+}
+$('zoomBack').addEventListener('click',  e=>{ e.stopPropagation(); goBack(); });
+$('zoomBack').addEventListener('touchend', e=>{ e.stopPropagation(); e.preventDefault(); goBack(); });
 
 function updatePanButtons(){
   const pl=document.getElementById('panLeft');
@@ -2988,6 +3229,7 @@ function zoomOutStep(){
   if(ns < 0){ ne = Math.min(dur, ne - ns); ns = 0; }
   if(ne > dur){ ns = Math.max(0, ns - (ne - dur)); ne = dur; }
   const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  pushView();
   viewStart = Math.max(0, ns);
   viewEnd   = Math.min(dur, ne);
   if(viewStart <= 0 && viewEnd >= dur){ exitZoom(); return; }
@@ -3009,6 +3251,7 @@ function panView(dir){
   if(ns < 0){ ne -= ns; ns = 0; }
   if(ne > dur){ ns -= (ne-dur); ne = dur; }
   const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
+  pushView();
   viewStart = Math.max(0,ns); viewEnd = Math.min(dur,ne);
   setZoomBadge(true);
   updatePanButtons();
@@ -3039,6 +3282,8 @@ function exitZoom(){
   if(!abuf) return;
   const snap = {offset0: offset, t0_0: t0, vs0: viewStart, ve0: viewEnd};
   const wasPlaying = playing;
+  zoomHistory = [];
+  phraseIdx = -1;
   viewStart=0; viewEnd=dur;
   setZoomBadge(false);
 

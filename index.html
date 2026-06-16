@@ -194,7 +194,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
       <div class="row" id="rowPitch">
         <div class="rl">Pitch</div>
         <div class="fic">
-          <label>min</label><input type="number" id="pmin" value="1000" min="100" max="10000" step="100" onfocus="this.select()">
+          <label>min</label><input type="number" id="pmin" value="1000" min="20" max="10000" step="10" onfocus="this.select()">
           <span style="color:var(--mut)">–</span>
           <label>max</label><input type="number" id="pmax" value="8000" min="100" max="12000" step="100" onfocus="this.select()">
           <span style="color:var(--mut);font-size:9px">Hz</span>
@@ -508,7 +508,7 @@ function makeCurveAMDF(){
   const sr = abuf.sampleRate;
   const data = monoMix(abuf);
   const total = data.length;
-  const p1 = parseInt(pmin.value)||80, p2 = parseInt(pmax.value)||8000;
+  const p1 = (v=>isNaN(v)?80:v)(parseInt(pmin.value)), p2 = (v=>isNaN(v)?8000:v)(parseInt(pmax.value));
   // Bornes de période en samples (inverses des fréquences)
   const lagMin = Math.floor(sr / p2);
   const lagMax = Math.ceil(sr / p1);
@@ -551,7 +551,7 @@ function makeCurveYIN(){
   const sr = abuf.sampleRate;
   const data = monoMix(abuf);
   const total = data.length;
-  const p1 = parseInt(pmin.value)||80, p2 = parseInt(pmax.value)||8000;
+  const p1 = (v=>isNaN(v)?80:v)(parseInt(pmin.value)), p2 = (v=>isNaN(v)?8000:v)(parseInt(pmax.value));
   const lagMin = Math.floor(sr / p2);
   const lagMax = Math.ceil(sr / p1);
   const frameSize = lagMax * 2;
@@ -624,7 +624,7 @@ function makeCurve(){
   // Utiliser le gMax global (specFull) comme référence stable — évite que le seuil
   // change selon la région affichée (sinon plus de points apparaissent sur les régions calmes)
   const gMaxRef = gMaxHiGlobal || spec.gMax;
-  const p1=parseInt(pmin.value)||1000, p2=parseInt(pmax.value)||8000;
+  const p1=(v=>isNaN(v)?1000:v)(parseInt(pmin.value)), p2=(v=>isNaN(v)?8000:v)(parseInt(pmax.value));
   const b1=Math.floor(p1/MFREQ*maxBin), b2=Math.ceil(p2/MFREQ*maxBin);
   curve=[];
   for(let c=0;c<cols;c++){
@@ -658,8 +658,10 @@ function makeCurveMusic(){
   const HARM_TOL   = 0.015;
   const gMaxRef = gMaxHiGlobal || spec.gMax;
   const THRESH  = gMaxRef * 0.02;
-  const b1 = Math.floor(80   / MFREQ * maxBinM);
-  const b2 = Math.ceil(4200  / MFREQ * maxBinM);
+  const p1m = (v=>isNaN(v)?80:v)(parseInt(pmin.value));
+  const p2m = (v=>isNaN(v)?4200:v)(parseInt(pmax.value));
+  const b1 = Math.floor(p1m / MFREQ * maxBinM);
+  const b2 = Math.ceil(p2m  / MFREQ * maxBinM);
 
   curveMusic = [];
   for(let c = 0; c < cols; c++){
@@ -1239,7 +1241,7 @@ function drawCurve(H){
   const yOf=hz=>hzToY(hz,H);
 
   if(showP){
-    const p1=parseInt(pmin.value)||1000, p2=parseInt(pmax.value)||8000;
+    const p1=(v=>isNaN(v)?1000:v)(parseInt(pmin.value)), p2=(v=>isNaN(v)?8000:v)(parseInt(pmax.value));
     // Bande de plage pitch (discrète)
     const y1=(1-p2/MFREQ)*H, y2=(1-p1/MFREQ)*H;
     ctx.fillStyle='rgba(240,200,74,.04)'; ctx.fillRect(0,y1,W,y2-y1);
@@ -1770,7 +1772,7 @@ async function computeSpecFull(){
   autoDetectMode();
 
   // Courbe de pitch sur tout le fichier
-  const p1=parseInt(pmin.value)||1000, p2=parseInt(pmax.value)||8000;
+  const p1=(v=>isNaN(v)?1000:v)(parseInt(pmin.value)), p2=(v=>isNaN(v)?8000:v)(parseInt(pmax.value));
   const b1f=Math.floor(p1/MFREQ*maxBin), b2f=Math.ceil(p2/MFREQ*maxBin);
   curveFull=[];
   for(let c=0;c<COLS_LO;c++){
@@ -2971,8 +2973,12 @@ document.getElementById('modeMusique').addEventListener('click',async()=>{
 });
 // Recalcul automatique quand les champs pitch min/max changent
 function applyAxis(){
-  FMIN_LOG = Math.max(20,   parseInt(ymin.value)||80);
+  FMIN_LOG = Math.max(20, parseInt(ymin.value)||80);
   MFREQ    = Math.min(20000, parseInt(ymax.value)||8000);
+  // Mettre à jour les bornes du champ pmin pour qu'il puisse suivre ymin
+  pmin.min = FMIN_LOG;
+  if(parseInt(pmin.value) < FMIN_LOG) pmin.value = FMIN_LOG;
+  if(parseInt(pmin.value) > MFREQ) pmin.value = Math.round(MFREQ * 0.5);
 }
 async function applyAndRedraw(){
   if(!abuf||!drawn) return;

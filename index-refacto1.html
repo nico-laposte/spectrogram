@@ -590,7 +590,7 @@ function ensureAudioContext() {
 
 // ── File loading ──────────────────────────────────────────────
 // Import button: always available once a file is loaded
-dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('click', () => { silentAudio.play().catch(()=>{}); ensureAudioContext(); fileInput.click(); });
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
 dropZone.addEventListener('drop', e => {
@@ -606,13 +606,14 @@ const importBtn = document.createElement('button');
 importBtn.textContent = '⊕ Importer';
 importBtn.style.cssText = `display:none;padding:4px 10px;border-radius:5px;border:1px solid #1E1E35;
   background:#161625;color:#7070A0;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;`;
-importBtn.addEventListener('click', () => fileInput.click());
+importBtn.addEventListener('click', () => { silentAudio.play().catch(()=>{}); ensureAudioContext(); fileInput.click(); });
 document.querySelector('header .spacer').after(importBtn);
 
 let mediaEl = null, mediaElSrc = null;
 
 async function loadFile(file) {
   ensureAudioContext();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
   // Stop current playback but keep UI visible if already loaded
   const hadFile = !!audioBuffer;
   if (hadFile) {

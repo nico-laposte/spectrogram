@@ -1,0 +1,1506 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>SonoScope — Analyse Audio</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@300;400;500&display=swap');
+
+  :root {
+    --bg: #08080E;
+    --surface: #0F0F1A;
+    --surface2: #161625;
+    --border: #1E1E35;
+    --accent: #00E5FF;
+    --accent2: #7B61FF;
+    --warn: #FF6B35;
+    --text: #E8E8F0;
+    --text2: #7070A0;
+    --text3: #404065;
+    --success: #00E59B;
+    --radius: 8px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+    flex-shrink: 0;
+    background: var(--surface);
+  }
+  .logo {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--accent);
+    letter-spacing: -0.5px;
+  }
+  .logo span { color: var(--text2); font-weight: 300; }
+  header .spacer { flex: 1; }
+  .file-info {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text2);
+    text-align: right;
+    line-height: 1.6;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── Drop zone ── */
+  #drop-zone {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    border: 2px dashed var(--border);
+    margin: 20px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+  }
+  #drop-zone.active, #drop-zone:hover { border-color: var(--accent); background: rgba(0,229,255,.03); }
+  #drop-zone svg { opacity: .3; }
+  #drop-zone p { color: var(--text2); text-align: center; line-height: 1.8; }
+  #drop-zone em { color: var(--accent); font-style: normal; }
+  #file-input { display: none; }
+
+  /* ── Main layout ── */
+  #app {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Spectrogram area ── */
+  #spectrogram-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  #spectrogram-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    display: block;
+    touch-action: none;
+  }
+
+  /* Time axis */
+  #time-axis {
+    position: absolute;
+    bottom: 0; left: 0;
+    width: 100%;
+    height: 22px;
+    pointer-events: none;
+  }
+
+  /* Freq axis */
+  #freq-axis {
+    position: absolute;
+    top: 0; left: 0;
+    width: 36px;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  /* Playhead */
+  #playhead {
+    position: absolute;
+    top: 0;
+    width: 2px;
+    height: calc(100% - 22px);
+    background: var(--accent);
+    pointer-events: none;
+    will-change: transform;
+    box-shadow: 0 0 8px var(--accent), 0 0 2px #fff;
+    transform: translateX(-1px);
+    transition: none;
+  }
+  #playhead::after {
+    content: '';
+    position: absolute;
+    top: -1px; left: -5px;
+    width: 12px; height: 12px;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 10px var(--accent);
+  }
+
+  /* Zoom overlay */
+  #zoom-select {
+    position: absolute;
+    top: 0;
+    background: rgba(0,229,255,.12);
+    border: 1px solid rgba(0,229,255,.5);
+    pointer-events: none;
+    height: calc(100% - 22px);
+    display: none;
+  }
+
+  /* ── Progress bar ── */
+  #progress-bar-wrap {
+    position: absolute;
+    bottom: 22px; left: 0;
+    width: 100%;
+    height: 3px;
+    background: rgba(255,255,255,.05);
+    display: none;
+    z-index: 10;
+  }
+  #progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    width: 0%;
+    transition: width .1s linear;
+  }
+  #progress-label {
+    position: absolute;
+    top: -22px; right: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    color: var(--accent);
+    background: rgba(8,8,14,.85);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  #cancel-btn {
+    position: absolute;
+    top: -22px; left: 8px;
+    font-size: 9px;
+    color: var(--warn);
+    cursor: pointer;
+    font-family: 'JetBrains Mono', monospace;
+    text-decoration: underline;
+    background: rgba(8,8,14,.85);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  /* Zoom nav */
+  #zoom-nav {
+    position: absolute;
+    top: 8px; right: 8px;
+    display: none;
+    gap: 6px;
+    z-index: 20;
+  }
+  #zoom-nav.visible { display: flex; }
+  .zoom-btn {
+    width: 28px; height: 28px;
+    background: rgba(8,8,14,.85);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color .15s, color .15s;
+  }
+  .zoom-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Controls ── */
+  #controls {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .ctrl-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  /* Transport */
+  .transport-btn {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    transition: transform .1s, background .15s;
+    flex-shrink: 0;
+  }
+  .transport-btn:active { transform: scale(.92); }
+  #btn-play {
+    background: var(--accent);
+    color: var(--bg);
+    font-size: 16px;
+    width: 42px; height: 42px;
+  }
+  #btn-play.playing { background: var(--warn); }
+  #btn-home { background: var(--surface2); color: var(--text); border: 1px solid var(--border); font-size: 16px; }
+  #btn-loop { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); font-size: 14px; }
+  #btn-loop.active { color: var(--accent); border-color: var(--accent); background: rgba(0,229,255,.08); }
+
+  /* Time display */
+  .time-display {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text2);
+    min-width: 90px;
+  }
+  .time-display .cur { color: var(--text); font-size: 15px; font-weight: 500; }
+
+  /* Speed */
+  .ctrl-label {
+    font-size: 10px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+  }
+  .speed-btns { display: flex; gap: 4px; }
+  .speed-btn {
+    padding: 4px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text2);
+    font-size: 11px;
+    cursor: pointer;
+    font-family: 'JetBrains Mono', monospace;
+    transition: all .12s;
+  }
+  .speed-btn.active { background: rgba(0,229,255,.1); border-color: var(--accent); color: var(--accent); }
+
+  /* Algo */
+  .algo-btns { display: flex; gap: 4px; }
+  .algo-btn {
+    padding: 4px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text2);
+    font-size: 11px;
+    cursor: pointer;
+    font-family: 'JetBrains Mono', monospace;
+    transition: all .12s;
+  }
+  .algo-btn.active { background: rgba(123,97,255,.12); border-color: var(--accent2); color: var(--accent2); }
+
+  /* Stereo toggle */
+  .toggle-wrap { display: flex; align-items: center; gap: 6px; }
+  .toggle {
+    width: 32px; height: 18px;
+    background: var(--surface2);
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    position: relative;
+    cursor: pointer;
+    transition: background .2s, border-color .2s;
+    flex-shrink: 0;
+  }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--text3);
+    transition: transform .2s, background .2s;
+  }
+  .toggle.active { background: rgba(0,229,255,.1); border-color: var(--accent); }
+  .toggle.active::after { transform: translateX(14px); background: var(--accent); }
+  .toggle-label { font-size: 11px; color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+
+  /* Tooltip */
+  .tooltip {
+    position: fixed;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    border-radius: 5px;
+    font-size: 10px;
+    color: var(--text2);
+    pointer-events: none;
+    z-index: 100;
+    opacity: 0;
+    transition: opacity .15s;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .tooltip.show { opacity: 1; }
+
+  /* Loading overlay */
+  #loading {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    background: rgba(8,8,14,.7);
+    backdrop-filter: blur(4px);
+    z-index: 50;
+  }
+  #loading.show { display: flex; }
+  .spinner {
+    width: 32px; height: 32px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading p { font-size: 12px; color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+
+  /* Color scale legend */
+  #colorscale {
+    position: absolute;
+    top: 8px; left: 44px;
+    width: 80px; height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #000033, #0000FF, #00FFFF, #00FF00, #FFFF00, #FF0000);
+    border: 1px solid var(--border);
+    pointer-events: none;
+  }
+
+  /* Instructions */
+  #hint {
+    position: absolute;
+    bottom: 28px; left: 44px;
+    font-size: 9px;
+    color: var(--text3);
+    font-family: 'JetBrains Mono', monospace;
+    pointer-events: none;
+    line-height: 1.8;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Sono<span>Scope</span></div>
+  <div class="spacer"></div>
+  <div class="file-info" id="file-info">Aucun fichier</div>
+</header>
+
+<!-- Drop Zone -->
+<div id="drop-zone">
+  <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+    <rect x="6" y="8" width="36" height="32" rx="4" stroke="#7070A0" stroke-width="1.5"/>
+    <path d="M24 18v12M18 24l6-6 6 6" stroke="#00E5FF" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M16 36h16" stroke="#7070A0" stroke-width="1.5" stroke-linecap="round"/>
+  </svg>
+  <p>Glissez un fichier audio ou vidéo<br><em>ou appuyez pour parcourir</em><br><small style="color:var(--text3)">MP3, WAV, M4A, OGG, MP4, MOV…</small></p>
+</div>
+<input type="file" id="file-input" accept="audio/*,video/*,audio/x-m4a,audio/mp4,audio/aac,video/mp4,video/quicktime,video/x-m4v,.m4a,.m4v,.mov,.mp4,.mp3,.wav,.ogg,.aac,.flac,.opus,.weba,.webm">
+
+<!-- Main App -->
+<div id="app">
+  <div id="spectrogram-wrap">
+    <canvas id="freq-axis"></canvas>
+    <canvas id="spectrogram-canvas"></canvas>
+    <canvas id="time-axis"></canvas>
+    <div id="playhead"></div>
+    <div id="zoom-select"></div>
+    <div id="zoom-nav">
+      <div class="zoom-btn" id="btn-zoom-back" title="Vue précédente">←</div>
+      <div class="zoom-btn" id="btn-zoom-close" title="Vue générale">✕</div>
+    </div>
+    <div id="progress-bar-wrap">
+      <div id="progress-bar"></div>
+      <div id="progress-label">0%</div>
+      <div id="cancel-btn">Annuler</div>
+    </div>
+    <div id="colorscale"></div>
+    <div id="hint">← Glissez pour zoomer · Maintenez pour déplacer (zoom) →</div>
+    <div id="loading"><div class="spinner"></div><p id="loading-text">Analyse…</p></div>
+  </div>
+
+  <div id="controls">
+    <!-- Row 1: Transport -->
+    <div class="ctrl-row">
+      <button class="transport-btn" id="btn-home" title="Retour au début">⏮</button>
+      <button class="transport-btn" id="btn-play" title="Lecture / Pause">▶</button>
+      <button class="transport-btn active" id="btn-loop" title="Boucle">↩</button>
+      <div class="time-display">
+        <span class="cur" id="time-cur">0:00.0</span>
+        <span> / </span><span id="time-dur">0:00</span>
+      </div>
+    </div>
+    <!-- Row 2: Speed -->
+    <div class="ctrl-row">
+      <span class="ctrl-label">Vitesse</span>
+      <div class="speed-btns">
+        <button class="speed-btn" data-speed="0.25">×0.25</button>
+        <button class="speed-btn" data-speed="0.5">×0.5</button>
+        <button class="speed-btn" data-speed="0.75">×0.75</button>
+        <button class="speed-btn active" data-speed="1">×1</button>
+        <button class="speed-btn" data-speed="1.5">×1.5</button>
+        <button class="speed-btn" data-speed="2">×2</button>
+      </div>
+    </div>
+    <!-- Row 3: Algo + Stereo -->
+    <div class="ctrl-row">
+      <span class="ctrl-label">Algo</span>
+      <div class="algo-btns">
+        <button class="algo-btn" data-algo="wsola">WSOLA</button>
+        <button class="algo-btn active" data-algo="pv">Phase Vocoder</button>
+      </div>
+      <div style="flex:1"></div>
+      <div class="toggle-wrap">
+        <div class="toggle" id="toggle-stereo"></div>
+        <span class="toggle-label">Stéréo</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<!-- Silent WAV for iOS silent mode fix (tiny loop) -->
+<audio id="silent-audio" loop style="display:none"></audio>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// SONOSCOPE — Core Application
+// ══════════════════════════════════════════════════════════════
+
+const SILENT_WAV_B64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+
+const $ = id => document.getElementById(id);
+const app        = $('app');
+const dropZone   = $('drop-zone');
+const fileInput  = $('file-input');
+const spectCanvas= $('spectrogram-canvas');
+const spectCtx   = spectCanvas.getContext('2d');
+const timeAxis   = $('time-axis');
+const timeCtx    = timeAxis.getContext('2d');
+const freqAxis   = $('freq-axis');
+const freqCtx    = freqAxis.getContext('2d');
+const playhead   = $('playhead');
+const btnPlay    = $('btn-play');
+const btnHome    = $('btn-home');
+const btnLoop    = $('btn-loop');
+const zoomNav    = $('zoom-nav');
+const zoomSelect = $('zoom-select');
+const progressWrap  = $('progress-bar-wrap');
+const progressBar   = $('progress-bar');
+const progressLabel = $('progress-label');
+const cancelBtn  = $('cancel-btn');
+const loading    = $('loading');
+const loadingText= $('loading-text');
+const timeCur    = $('time-cur');
+const timeDur    = $('time-dur');
+const fileInfo   = $('file-info');
+const silentAudio= $('silent-audio');
+const tooltip    = $('tooltip');
+
+// ── State ──────────────────────────────────────────────────────
+let audioCtx   = null;
+let audioBuffer = null;
+let duration    = 0;
+let sampleRate  = 0;
+let isPlaying   = false;
+let isLoop      = true;
+let playSpeed   = 1.0;
+let algo        = 'pv';
+let stereoMode  = false;
+
+// Playback clock: position = playStartPos + (audioCtx.currentTime - playStartTime) * playSpeed
+let playStartTime = 0;
+let playStartPos  = 0;
+
+// Spectrogram
+let spectrogramData = null;
+let numFrames = 0;
+let numBins   = 0;
+
+// Zoom / view
+let viewStart = 0;
+let viewEnd   = 0;
+let zoomStack = [];
+
+// Gesture state
+let gesture          = null; // 'playhead'|'zoom-select'|'pan'|null
+let gestureStartX    = 0;
+let touchStartX      = 0, touchStartY = 0, touchStartTime = 0;
+let panLongPressTimer = null;
+let panStartX        = 0, panViewStart = 0, panViewEnd = 0;
+let wasPlayingBeforeDrag = false; // pause on playhead grab, resume on release
+
+// Time-stretching
+let stretchedBuffer  = null;
+let currentStretchKey = '';
+let cancelStretch    = false;
+let isStretching     = false;   // background stretch in progress
+let pendingStretchKey = '';     // key being computed right now
+
+// RAF
+let animFrame = null;
+
+// Offscreen spectrogram cache
+let offscreen   = null;
+let offCtx      = null;
+let lastDrawKey = '';
+
+// ── iOS silent mode fix ───────────────────────────────────────
+function initSilentAudio() {
+  const wav = atob(SILENT_WAV_B64);
+  const buf = new Uint8Array(wav.length);
+  for (let i = 0; i < wav.length; i++) buf[i] = wav.charCodeAt(i);
+  const blob = new Blob([buf], {type:'audio/wav'});
+  silentAudio.src = URL.createObjectURL(blob);
+}
+initSilentAudio();
+
+// ── AudioContext ──────────────────────────────────────────────
+function ensureAudioContext() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+// ── File loading ──────────────────────────────────────────────
+// Import button: always available once a file is loaded
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('active');
+  const f = e.dataTransfer.files[0]; if (f) loadFile(f).catch(console.error);
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files[0]) { loadFile(e.target.files[0]).catch(console.error); e.target.value = ''; }
+});
+
+// "Import" button shown in header once a file is loaded
+const importBtn = document.createElement('button');
+importBtn.textContent = '⊕ Importer';
+importBtn.style.cssText = `display:none;padding:4px 10px;border-radius:5px;border:1px solid #1E1E35;
+  background:#161625;color:#7070A0;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;`;
+importBtn.addEventListener('click', () => fileInput.click());
+document.querySelector('header .spacer').after(importBtn);
+
+let mediaEl = null, mediaElSrc = null;
+
+async function loadFile(file) {
+  ensureAudioContext();
+  // Stop current playback but keep UI visible if already loaded
+  const hadFile = !!audioBuffer;
+  if (hadFile) {
+    stopPlayback(); isPlaying = false;
+    btnPlay.textContent = '▶'; btnPlay.classList.remove('playing');
+    cancelAnimationFrame(animFrame);
+  }
+  showLoading('Décodage audio…');
+
+  let decoded = null;
+  try {
+    const ab = await file.arrayBuffer();
+    decoded = await new Promise((res, rej) => audioCtx.decodeAudioData(ab, res, rej));
+  } catch(e) { decoded = null; }
+
+  if (!decoded) {
+    showLoading('Décodage via MediaElement…');
+    try { decoded = await decodeViaMediaElement(file); }
+    catch(e) { hideLoading(); alert('Impossible de décoder :\n' + (e.message||e)); return; }
+  }
+  if (!decoded) { hideLoading(); alert('Décodage échoué.'); return; }
+
+  audioBuffer = decoded;
+  duration    = decoded.duration;
+  sampleRate  = decoded.sampleRate;
+  viewStart   = 0; viewEnd = duration;
+  zoomStack   = [];
+  stretchedBuffer = null; currentStretchKey = ''; pendingStretchKey = '';
+  playStartPos = 0; playStartTime = 0;
+  _spectMax = 0;
+
+  const chLabel = decoded.numberOfChannels > 1 ? decoded.numberOfChannels + 'ch' : 'mono';
+  fileInfo.textContent = `${file.name}  ·  ${fmtTime(duration)}  ·  ${Math.round(sampleRate/1000)}kHz  ·  ${chLabel}`;
+  timeDur.textContent = fmtTime(duration);
+  dropZone.style.display = 'none';
+  app.style.display = 'flex';
+  importBtn.style.display = '';
+  hideLoading();
+
+  // Show the app immediately, with progress bar for spectrogram compute
+  spectrogramData = null; lastDrawKey = '';
+  drawSpectrogram(); drawAxes(); updatePlayhead();
+
+  await computeSpectrogram(decoded);
+  hideProgress();
+  drawSpectrogram(); drawAxes(); updatePlayhead();
+}
+
+async function decodeViaMediaElement(file) {
+  if (mediaElSrc) { URL.revokeObjectURL(mediaElSrc); mediaElSrc = null; }
+  if (mediaEl)    { mediaEl.pause(); mediaEl.remove(); mediaEl = null; }
+  const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|m4v|mkv|avi|webm)$/i.test(file.name);
+  mediaElSrc = URL.createObjectURL(file);
+  mediaEl = document.createElement(isVideo ? 'video' : 'audio');
+  mediaEl.src = mediaElSrc; mediaEl.preload = 'auto';
+  mediaEl.style.cssText = 'position:fixed;opacity:0;pointer-events:none;width:1px;height:1px;top:-9999px';
+  document.body.appendChild(mediaEl);
+  await new Promise((res, rej) => {
+    mediaEl.onloadedmetadata = res;
+    mediaEl.onerror = () => rej(new Error(`Erreur MediaElement (code ${mediaEl.error?.code})`));
+    mediaEl.load();
+  });
+  const dur = mediaEl.duration;
+  if (!isFinite(dur) || dur <= 0) throw new Error('Durée indéterminée');
+  const sr = audioCtx.sampleRate;
+  const expectedSamples = Math.ceil(dur * sr);
+  return new Promise((res, rej) => {
+    const capCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: sr});
+    const captured = []; let totalSamples = 0; let done = false;
+    const mediaSrc = capCtx.createMediaElementSource(mediaEl);
+    const scriptProc = capCtx.createScriptProcessor(4096, 2, 2);
+    showProgress('Capture audio…');
+    scriptProc.onaudioprocess = ev => {
+      if (done) return;
+      const L = new Float32Array(ev.inputBuffer.getChannelData(0));
+      const R = new Float32Array(ev.inputBuffer.getChannelData(1));
+      captured.push([L, R]); totalSamples += L.length;
+      setProgress(Math.min(99, Math.round(totalSamples/expectedSamples*100)), `Capture… ${Math.min(99,Math.round(totalSamples/expectedSamples*100))}%`);
+      if (totalSamples >= expectedSamples) finalize();
+    };
+    mediaEl.onended = () => setTimeout(finalize, 150);
+    mediaEl.onerror = () => rej(new Error(`Erreur lecture`));
+    mediaSrc.connect(scriptProc); scriptProc.connect(capCtx.destination);
+    mediaEl.currentTime = 0; mediaEl.play().catch(rej);
+    function finalize() {
+      if (done) return; done = true;
+      mediaEl.pause(); scriptProc.disconnect(); mediaSrc.disconnect(); capCtx.close(); hideProgress();
+      const finalLen = Math.min(totalSamples, expectedSamples);
+      const outBuf = audioCtx.createBuffer(2, finalLen, sr);
+      let offset = 0;
+      for (const [L,R] of captured) {
+        const n = Math.min(L.length, finalLen - offset);
+        outBuf.getChannelData(0).set(L.subarray(0,n), offset);
+        outBuf.getChannelData(1).set(R.subarray(0,n), offset);
+        offset += n; if (offset >= finalLen) break;
+      }
+      res(outBuf);
+    }
+  });
+}
+
+// ── Spectrogram ───────────────────────────────────────────────
+async function computeSpectrogram(buffer) {
+  showProgress('Analyse du spectrogramme…');
+  setProgress(0, 'Analyse… 0%');
+  const ch = buffer.getChannelData(0);
+  const fftSize = 1024, hop = 256;
+  const win = new Float32Array(fftSize);
+  for (let i = 0; i < fftSize; i++) win[i] = 0.5 - 0.5*Math.cos(2*Math.PI*i/fftSize);
+  numFrames = Math.floor((ch.length - fftSize) / hop) + 1;
+  numBins   = fftSize / 2;
+  spectrogramData = new Float32Array(numFrames * numBins);
+  const real = new Float32Array(fftSize), imag = new Float32Array(fftSize);
+  for (let f = 0; f < numFrames; f++) {
+    const off = f * hop;
+    for (let i = 0; i < fftSize; i++) { real[i] = (off+i < ch.length ? ch[off+i] : 0)*win[i]; imag[i] = 0; }
+    fftInPlace(real, imag);
+    for (let b = 0; b < numBins; b++) spectrogramData[f*numBins+b] = Math.sqrt(real[b]*real[b]+imag[b]*imag[b]);
+    if (f % 400 === 0) {
+      setProgress(Math.round(f/numFrames*100), `Analyse ${Math.round(f/numFrames*100)}%`);
+      await yieldToMain();
+    }
+  }
+  hideProgress(); lastDrawKey = ''; // invalidate offscreen cache
+}
+
+function fftInPlace(re, im) {
+  const n = re.length; let j = 0;
+  for (let i = 1; i < n; i++) {
+    let bit = n >> 1;
+    while (j & bit) { j ^= bit; bit >>= 1; } j ^= bit;
+    if (i < j) { [re[i],re[j]]=[re[j],re[i]]; [im[i],im[j]]=[im[j],im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2*Math.PI/len, wR = Math.cos(ang), wI = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cR = 1, cI = 0;
+      for (let k = 0; k < len/2; k++) {
+        const uR=re[i+k],uI=im[i+k],vR=re[i+k+len/2]*cR-im[i+k+len/2]*cI,vI=re[i+k+len/2]*cI+im[i+k+len/2]*cR;
+        re[i+k]=uR+vR; im[i+k]=uI+vI; re[i+k+len/2]=uR-vR; im[i+k+len/2]=uI-vI;
+        const nr=cR*wR-cI*wI; cI=cR*wI+cI*wR; cR=nr;
+      }
+    }
+  }
+}
+
+function yieldToMain() { return new Promise(r => setTimeout(r, 0)); }
+
+// ── Draw ──────────────────────────────────────────────────────
+let _spectMax = 0; // cached normalization max
+
+function drawSpectrogram() {
+  if (!spectrogramData) return;
+  const wrap = $('spectrogram-wrap');
+  const W = wrap.clientWidth, H = wrap.clientHeight - 22;
+  spectCanvas.width = W; spectCanvas.height = H + 22;
+
+  // Compute max once per file
+  if (_spectMax === 0) {
+    for (let i = 0; i < spectrogramData.length; i++)
+      if (spectrogramData[i] > _spectMax) _spectMax = spectrogramData[i];
+    if (_spectMax === 0) _spectMax = 1;
+  }
+
+  // Visible frame range
+  const frameDur = duration / numFrames;
+  const f0 = Math.max(0, Math.floor(viewStart / frameDur));
+  const f1 = Math.min(numFrames, Math.ceil(viewEnd / frameDur));
+  const visFrames = Math.max(1, f1 - f0);
+
+  // Draw destination dimensions
+  const dstX = 36, dstW = W - 36;
+
+  // Create ImageData for the destination area directly
+  const imgData = spectCtx.createImageData(dstW, H);
+  const d = imgData.data;
+
+  for (let px = 0; px < dstW; px++) {
+    // Map pixel column → source frame
+    const frac = px / dstW;
+    const srcF = Math.floor(f0 + frac * visFrames);
+    const f = Math.min(srcF, numFrames - 1);
+
+    for (let py = 0; py < H; py++) {
+      // Map pixel row → frequency bin (top = high freq)
+      const b = Math.floor((1 - py / H) * numBins);
+      const bin = Math.min(b, numBins - 1);
+
+      const mag  = spectrogramData[f * numBins + bin] / _spectMax;
+      const db   = 20 * Math.log10(mag + 1e-6);
+      const norm = Math.max(0, Math.min(1, (db + 80) / 80));
+      const [r, g, bl] = spectColor(norm);
+      const idx = (py * dstW + px) * 4;
+      d[idx] = r; d[idx+1] = g; d[idx+2] = bl; d[idx+3] = 255;
+    }
+  }
+
+  spectCtx.clearRect(0, 0, W, H + 22);
+  spectCtx.putImageData(imgData, dstX, 0);
+  drawAxes();
+}
+
+function spectColor(t) {
+  const stops = [[0,0,30],[0,0,200],[0,220,255],[0,255,100],[255,220,0],[255,0,0]];
+  const si = t*(stops.length-1), i = Math.min(Math.floor(si), stops.length-2), f = si-i;
+  const a=stops[i], b=stops[i+1];
+  return [Math.round(a[0]+(b[0]-a[0])*f), Math.round(a[1]+(b[1]-a[1])*f), Math.round(a[2]+(b[2]-a[2])*f)];
+}
+
+function drawAxes() {
+  if (!audioBuffer) return;
+  const wrap = $('spectrogram-wrap');
+  const W = wrap.clientWidth, H = wrap.clientHeight - 22;
+  // Time axis
+  timeAxis.width = W; timeAxis.height = 22;
+  timeAxis.style.cssText = `position:absolute;bottom:0;left:0;width:${W}px;height:22px;pointer-events:none`;
+  timeCtx.fillStyle = '#0F0F1A'; timeCtx.fillRect(0,0,W,22);
+  timeCtx.strokeStyle='#1E1E35'; timeCtx.lineWidth=1; timeCtx.beginPath(); timeCtx.moveTo(0,0); timeCtx.lineTo(W,0); timeCtx.stroke();
+  const viewW = W-36, viewDur = viewEnd-viewStart;
+  const step = niceStep(viewDur/8), t0 = Math.ceil(viewStart/step)*step;
+  for (let t = t0; t <= viewEnd; t += step) {
+    const x = 36 + (t-viewStart)/viewDur*viewW;
+    timeCtx.strokeStyle='#2A2A45'; timeCtx.beginPath(); timeCtx.moveTo(x,0); timeCtx.lineTo(x,6); timeCtx.stroke();
+    timeCtx.fillStyle='#606090'; timeCtx.font='9px JetBrains Mono,monospace'; timeCtx.textAlign='center';
+    timeCtx.fillText(fmtTime(t), x, 17);
+  }
+  // Freq axis
+  freqAxis.width=36; freqAxis.height=H;
+  freqAxis.style.cssText = `position:absolute;top:0;left:0;width:36px;height:${H}px;pointer-events:none`;
+  freqCtx.fillStyle='#08080E'; freqCtx.fillRect(0,0,36,H);
+  const maxFreq=sampleRate/2;
+  for (const f of [20000,10000,5000,2000,1000,500,200,100]) {
+    if (f>maxFreq) continue;
+    const y=H*(1-f/maxFreq);
+    freqCtx.strokeStyle='#2A2A45'; freqCtx.lineWidth=0.5; freqCtx.beginPath(); freqCtx.moveTo(30,y); freqCtx.lineTo(36,y); freqCtx.stroke();
+    freqCtx.fillStyle='#505080'; freqCtx.font='8px JetBrains Mono,monospace'; freqCtx.textAlign='right';
+    freqCtx.fillText(f>=1000?(f/1000)+'k':f, 28, y+3);
+  }
+}
+
+function niceStep(r) {
+  for (const m of [0.01,0.02,0.05,0.1,0.2,0.5,1,2,5,10,20,30,60,120,300,600]) if(m>=r) return m;
+  return r;
+}
+
+// ── Playback ──────────────────────────────────────────────────
+
+let sourceNode = null;
+let _playBuf   = null;
+
+// Playback geometry — set at startPlayback, used by currentPos()
+let _startAudioTime = 0;
+let _startPos       = 0;
+let _loopStartPos   = 0;
+let _loopEndPos     = 0;
+
+// Stop completely (pause / seek / file load). NOT used for buffer switches.
+function stopPlayback() {
+  if (sourceNode) {
+    try { sourceNode.stop(); } catch(e) {}
+    try { sourceNode.disconnect(); } catch(e) {}
+    sourceNode = null;
+  }
+  cancelAnimationFrame(animFrame); animFrame = null;
+}
+
+
+let _activeSpeed = 1.0; // speed of the currently playing node (may differ from playSpeed during compute)
+
+// currentPos() returns position in original-file seconds.
+function currentPos() {
+  if (!isPlaying || !audioCtx) return playStartPos;
+  const elapsed = (audioCtx.currentTime - _startAudioTime) * _activeSpeed;
+  const raw     = _startPos + elapsed;
+  if (!isLoop) return Math.min(raw, _loopEndPos);
+  const span = _loopEndPos - _loopStartPos;
+  if (span <= 0) return _loopStartPos;
+  return _loopStartPos + ((raw - _loopStartPos) % span + span) % span;
+}
+
+function togglePlay() {
+  if (!audioBuffer) return;
+  ensureAudioContext(); silentAudio.play().catch(()=>{});
+  if (isPlaying) {
+    const pos = currentPos();
+    stopPlayback();
+    isPlaying = false; playStartPos = Math.min(pos, duration);
+    btnPlay.textContent='▶'; btnPlay.classList.remove('playing');
+  } else {
+    startPlayback(playStartPos);
+  }
+}
+
+// loopEnd in buffer-time, strictly < buf.duration so Web Audio respects it
+function _loopEnd(buf, bufScale) {
+  return Math.min(viewEnd * bufScale, buf.duration - 1 / buf.sampleRate);
+}
+
+async function startPlayback(fromPos = 0, buf = null) {
+  if (!audioBuffer) return;
+  ensureAudioContext();
+  if (!buf) buf = getCachedBuffer();
+  if (!buf) { launchBackgroundStretch(fromPos); return; }
+
+  // Capture position from running node BEFORE stopping it
+  const startFrom = isPlaying
+    ? Math.max(viewStart, Math.min(viewEnd, currentPos()))
+    : Math.max(viewStart, Math.min(viewEnd, fromPos));
+
+  const bufScale     = buf.duration / duration;
+  const loopStartBuf = viewStart * bufScale;
+  const loopEndBuf   = _loopEnd(buf, bufScale);
+  const offsetInBuf  = Math.min(startFrom * bufScale, loopEndBuf - 1 / buf.sampleRate);
+  const now          = audioCtx.currentTime;
+
+  // Create and start NEW node first
+  const src = audioCtx.createBufferSource();
+  src.buffer    = buf;
+  src.loop      = true;
+  src.loopStart = loopStartBuf;
+  src.loopEnd   = loopEndBuf;
+  src.connect(audioCtx.destination);
+  src.start(0, offsetInBuf);
+
+  // NOW stop the old node — new one is already producing audio, no gap
+  if (sourceNode) {
+    try { sourceNode.stop(); } catch(e) {}
+    try { sourceNode.disconnect(); } catch(e) {}
+  }
+
+  if (!isLoop) {
+    const timeUntilEnd = loopEndBuf - offsetInBuf;
+    if (timeUntilEnd > 0) src.stop(now + timeUntilEnd);
+    src.onended = () => {
+      if (src !== sourceNode) return;
+      sourceNode   = null;
+      isPlaying    = false;
+      playStartPos = viewStart;
+      btnPlay.textContent='▶'; btnPlay.classList.remove('playing');
+      cancelAnimationFrame(animFrame); animFrame = null;
+      updatePlayhead();
+    };
+  }
+
+  _startAudioTime = now;
+  _startPos       = startFrom;
+  _loopStartPos   = viewStart;
+  _loopEndPos     = viewEnd;
+  _activeSpeed    = (buf === audioBuffer) ? 1.0 : playSpeed;
+
+  sourceNode    = src;
+  playStartPos  = startFrom;
+  playStartTime = now;
+  isPlaying     = true;
+
+  btnPlay.textContent='⏸'; btnPlay.classList.add('playing');
+  if (!animFrame) animatePlayhead();
+}
+
+// Modify loopStart/loopEnd live — update geometry for currentPos() too.
+function updateLoopBounds() {
+  if (!sourceNode || !isPlaying) return;
+  const buf      = sourceNode.buffer;
+  const bufScale = buf.duration / duration;
+  sourceNode.loopStart = viewStart * bufScale;
+  sourceNode.loopEnd   = _loopEnd(buf, bufScale);
+
+  // Re-anchor: current position becomes new _startPos, now becomes new _startAudioTime
+  const pos = currentPos();
+  const clamped = Math.max(viewStart, Math.min(viewEnd, pos));
+  _startAudioTime = audioCtx.currentTime;
+  _startPos       = clamped;
+  _loopStartPos   = viewStart;
+  _loopEndPos     = viewEnd;
+  playStartPos    = clamped;
+  playStartTime   = _startAudioTime;
+}
+
+function getCachedBuffer() {
+  if (playSpeed === 1.0) return audioBuffer;
+  const key = `${algo}_${playSpeed}_${stereoMode}`;
+  if (key === currentStretchKey && stretchedBuffer) return stretchedBuffer;
+  return null;
+}
+
+// Launch background stretch — current playback continues untouched until result is ready
+async function launchBackgroundStretch() {
+  const key = `${algo}_${playSpeed}_${stereoMode}`;
+  if (pendingStretchKey === key && isStretching) return;
+
+  // Cancel any in-progress stretch for a different key
+  if (isStretching) {
+    cancelStretch = true;
+    await yieldToMain();
+  }
+
+  isStretching      = true;
+  pendingStretchKey = key;
+  cancelStretch     = false;
+  showProgress(`Calcul ${algo === 'pv' ? 'Phase Vocoder' : 'WSOLA'}…`);
+
+  let result = null;
+  try {
+    if (algo === 'wsola') result = await stretchWSOLA(audioBuffer, playSpeed, stereoMode);
+    else                  result = await stretchPhaseVocoder(audioBuffer, playSpeed, stereoMode);
+  } catch(e) {}
+
+  hideProgress();
+  isStretching = false;
+
+  if (cancelStretch || pendingStretchKey !== key || !result) return;
+
+  stretchedBuffer   = result;
+  currentStretchKey = key;
+  pendingStretchKey = '';
+
+  // Seamless switch: capture position NOW from the still-running node
+  if (isPlaying) {
+    startPlayback(currentPos(), result);
+  }
+}
+
+function animatePlayhead() {
+  animFrame = null;
+  if (!isPlaying) return;
+  updatePlayhead();
+  animFrame = requestAnimationFrame(animatePlayhead);
+}
+
+function updatePlayhead() {
+  const pos = currentPos();
+  const clamped = Math.max(0, Math.min(duration, pos));
+  timeCur.textContent = fmtTime(clamped);
+  if (!spectrogramData) return;
+  const wrap = $('spectrogram-wrap');
+  const W = wrap.clientWidth, viewW = W-36, viewDur = viewEnd-viewStart;
+  const frac = (clamped - viewStart) / viewDur;
+  playhead.style.transform = `translateX(${36 + frac*viewW}px)`;
+  playhead.style.opacity   = (frac >= 0 && frac <= 1) ? '1' : '0';
+}
+
+// ── Time-stretching ───────────────────────────────────────────
+// WSOLA
+async function stretchWSOLA(buffer, speed, stereo) {
+  const numCh = stereo ? buffer.numberOfChannels : 1;
+  const inLen  = buffer.length;
+  const outLen = Math.round(inLen / speed);
+  const out    = audioCtx.createBuffer(numCh, outLen, buffer.sampleRate);
+  const winSz = 1024, hopOut = 512, hopIn = Math.round(hopOut*speed), search = 256;
+
+  for (let ch = 0; ch < numCh; ch++) {
+    if (cancelStretch) return null;
+    const inp = buffer.getChannelData(ch);
+    const outp= out.getChannelData(ch);
+    const win = hannWindow(winSz);
+    const overlap = new Float32Array(winSz);
+    let inPos=0, outPos=0, frame=0;
+    while (outPos+winSz < outLen) {
+      if (cancelStretch) return null;
+      let bestShift=0, bestCorr=-Infinity;
+      const s0=Math.max(0,inPos-search), s1=Math.min(inLen-winSz,inPos+search);
+      for (let s=s0; s<=s1; s+=4) {
+        let corr=0;
+        for (let i=0; i<winSz; i++) corr += (overlap[i]/(Math.abs(overlap[i])+1e-6))*(inp[s+i]||0);
+        if (corr>bestCorr){bestCorr=corr;bestShift=s-inPos;}
+      }
+      const rp=inPos+bestShift;
+      for (let i=0; i<winSz; i++){
+        const s=inp[Math.min(rp+i,inLen-1)]||0;
+        outp[outPos+i]=(outp[outPos+i]||0)+s*win[i]; overlap[i]=s*win[i];
+      }
+      outPos+=hopOut; inPos+=hopIn; frame++;
+      if (frame%200===0) {
+        // stereo progress: ch contributes [0..50] or [50..100]
+        const chPct = (ch/numCh + (outPos/outLen)/numCh)*100;
+        setProgress(Math.round(chPct), `WSOLA ${Math.round(chPct)}%`);
+        await yieldToMain();
+      }
+    }
+  }
+  return out;
+}
+
+// Phase Vocoder
+async function stretchPhaseVocoder(buffer, speed, stereo) {
+  const numCh = stereo ? buffer.numberOfChannels : 1;
+  const inLen  = buffer.length;
+  const outLen = Math.round(inLen / speed);
+  const out    = audioCtx.createBuffer(numCh, outLen, buffer.sampleRate);
+  const fftSz  = 2048, hopIn = Math.round(fftSz/4), hopOut = Math.round(hopIn/speed);
+
+  for (let ch = 0; ch < numCh; ch++) {
+    if (cancelStretch) return null;
+    const inp  = buffer.getChannelData(ch);
+    const outp = out.getChannelData(ch);
+    const win  = hannWindow(fftSz);
+    const phaseAcc  = new Float32Array(fftSz/2);
+    const lastPhase = new Float32Array(fftSz/2);
+    let inPos=0, outPos=0, frame=0;
+    while (outPos+fftSz < outLen) {
+      if (cancelStretch) return null;
+      const re=new Float32Array(fftSz), im=new Float32Array(fftSz);
+      for (let i=0;i<fftSz;i++){re[i]=(inp[inPos+i]||0)*win[i];}
+      fftInPlace(re,im);
+      const mag=new Float32Array(fftSz/2), pha=new Float32Array(fftSz/2);
+      for (let b=0;b<fftSz/2;b++){mag[b]=Math.sqrt(re[b]*re[b]+im[b]*im[b]);pha[b]=Math.atan2(im[b],re[b]);}
+      const TWO_PI=2*Math.PI;
+      for (let b=0;b<fftSz/2;b++){
+        let dp=pha[b]-lastPhase[b]-b*TWO_PI*hopIn/fftSz;
+        dp-=TWO_PI*Math.round(dp/TWO_PI);
+        phaseAcc[b]+=(b*TWO_PI/fftSz+dp/hopIn)*hopOut; lastPhase[b]=pha[b];
+      }
+      const reO=new Float32Array(fftSz),imO=new Float32Array(fftSz);
+      for (let b=0;b<fftSz/2;b++){
+        reO[b]=mag[b]*Math.cos(phaseAcc[b]); imO[b]=mag[b]*Math.sin(phaseAcc[b]);
+        if(b>0){reO[fftSz-b]=reO[b];imO[fftSz-b]=-imO[b];}
+      }
+      for (let i=0;i<fftSz;i++) imO[i]=-imO[i];
+      fftInPlace(reO,imO);
+      for (let i=0;i<fftSz&&outPos+i<outLen;i++) outp[outPos+i]+=reO[i]/fftSz*win[i];
+      inPos+=hopIn; outPos+=hopOut; frame++;
+      if (frame%100===0){
+        const chPct=(ch/numCh+(outPos/outLen)/numCh)*100;
+        setProgress(Math.round(chPct),`PV ${Math.round(chPct)}%`);
+        await yieldToMain();
+      }
+    }
+  }
+  return out;
+}
+
+function hannWindow(n) {
+  const w=new Float32Array(n);
+  for (let i=0;i<n;i++) w[i]=0.5-0.5*Math.cos(2*Math.PI*i/n);
+  return w;
+}
+
+// ── Zoom & Pan ────────────────────────────────────────────────
+
+function applyZoom(start, end) {
+  if (end - start < 0.05) return;
+  zoomStack.push({start: viewStart, end: viewEnd});
+  viewStart = start; viewEnd = end;
+  zoomNav.classList.add('visible');
+
+  const pos       = currentPos();
+  const posInView = pos >= viewStart && pos <= viewEnd;
+  const resumeAt  = posInView ? pos : viewStart;
+  playStartPos    = resumeAt;
+
+  drawSpectrogram(); drawAxes(); updatePlayhead();
+
+  if (isPlaying) {
+    if (posInView) {
+      updateLoopBounds(); // zero audio interruption
+    } else {
+      stopPlayback(); cancelAnimationFrame(animFrame); isPlaying = false;
+      startPlayback(resumeAt);
+    }
+  }
+}
+
+function zoomBack() {
+  if (!zoomStack.length) return;
+  const pos  = currentPos();
+  const prev = zoomStack.pop();
+  viewStart = prev.start; viewEnd = prev.end;
+  if (!zoomStack.length) zoomNav.classList.remove('visible');
+
+  const posInView = pos >= viewStart && pos <= viewEnd;
+  const resumeAt  = posInView ? pos : viewStart;
+  playStartPos    = resumeAt;
+
+  drawSpectrogram(); drawAxes(); updatePlayhead();
+
+  if (isPlaying) {
+    if (posInView) {
+      updateLoopBounds();
+    } else {
+      stopPlayback(); cancelAnimationFrame(animFrame); isPlaying = false;
+      startPlayback(resumeAt);
+    }
+  }
+}
+
+function zoomClose() {
+  const pos = currentPos();
+  zoomStack = []; viewStart = 0; viewEnd = duration;
+  zoomNav.classList.remove('visible');
+
+  playStartPos = pos;
+  drawSpectrogram(); drawAxes(); updatePlayhead();
+
+  if (isPlaying) {
+    updateLoopBounds(); // pos is always inside [0, duration]
+  }
+}
+
+$('btn-zoom-back').addEventListener('click', zoomBack);
+$('btn-zoom-close').addEventListener('click', zoomClose);
+
+// ── Seek (handles playing/paused, with restart) ───────────────
+function seekTo(pos) {
+  pos = Math.max(viewStart, Math.min(viewEnd, pos));
+  const wasPlaying = isPlaying;
+  stopPlayback(); cancelAnimationFrame(animFrame); isPlaying=false;
+  playStartPos = pos;
+  if (wasPlaying) startPlayback(pos);
+  else updatePlayhead();
+}
+
+// ── Canvas interaction ────────────────────────────────────────
+function canvasX2Time(clientX) {
+  const rect = spectCanvas.getBoundingClientRect();
+  const x = clientX - rect.left - 36;
+  return viewStart + (x / (rect.width-36)) * (viewEnd-viewStart);
+}
+
+function playheadScreenX() {
+  // Returns the absolute screen X of the playhead
+  const rect = spectCanvas.getBoundingClientRect();
+  const pos = currentPos();
+  const frac = (pos - viewStart) / (viewEnd - viewStart);
+  return rect.left + 36 + frac * (rect.width-36);
+}
+
+// Touch
+spectCanvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  touchStartX = t.clientX; touchStartY = t.clientY; touchStartTime = Date.now();
+  gesture = null; gestureStartX = t.clientX;
+  wasPlayingBeforeDrag = false;
+
+  // Long-press for pan (zoom mode only)
+  if (zoomStack.length > 0) {
+    panLongPressTimer = setTimeout(() => {
+      gesture = 'pan';
+      panStartX = t.clientX; panViewStart = viewStart; panViewEnd = viewEnd;
+      showTooltip(t.clientX, t.clientY, 'Déplacement');
+    }, 400);
+  }
+}, {passive:false});
+
+spectCanvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  const dx = t.clientX - touchStartX, dy = t.clientY - touchStartY;
+
+  if (gesture === 'playhead') {
+    const newTime = Math.max(viewStart, Math.min(viewEnd, canvasX2Time(t.clientX)));
+    playStartPos = newTime;
+    updatePlayhead();
+    return;
+  }
+
+  if (gesture === 'pan') {
+    const rect = spectCanvas.getBoundingClientRect();
+    const viewDur = panViewEnd - panViewStart;
+    const shift = -(t.clientX - panStartX) / (rect.width-36) * viewDur;
+    let ns=panViewStart+shift, ne=panViewEnd+shift;
+    if (ns<0){ns=0;ne=viewDur;} if (ne>duration){ne=duration;ns=duration-viewDur;}
+    viewStart=ns; viewEnd=ne;
+    drawSpectrogram(); drawAxes(); updatePlayhead();
+    return;
+  }
+
+  if (gesture === null && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+    clearTimeout(panLongPressTimer);
+    // Check if drag started near the playhead
+    const phX = playheadScreenX();
+    if (Math.abs(touchStartX - phX) < 36) {
+      gesture = 'playhead';
+      wasPlayingBeforeDrag = isPlaying;
+      if (isPlaying) {
+        const pos = currentPos();
+        stopPlayback();
+        isPlaying = false; playStartPos = pos;
+        btnPlay.textContent='▶'; btnPlay.classList.remove('playing');
+      }
+      // Apply first move immediately
+      const newTime = Math.max(viewStart, Math.min(viewEnd, canvasX2Time(t.clientX)));
+      playStartPos = newTime;
+      updatePlayhead();
+    } else {
+      gesture = 'zoom-select';
+      const rect = spectCanvas.getBoundingClientRect();
+      const x1=Math.min(gestureStartX,t.clientX)-rect.left;
+      const x2=Math.max(gestureStartX,t.clientX)-rect.left;
+      zoomSelect.style.display='block';
+      zoomSelect.style.left=x1+'px'; zoomSelect.style.width=(x2-x1)+'px';
+    }
+    return;
+  }
+
+  if (gesture === 'zoom-select') {
+    const rect=spectCanvas.getBoundingClientRect();
+    const x1=Math.min(gestureStartX,t.clientX)-rect.left;
+    const x2=Math.max(gestureStartX,t.clientX)-rect.left;
+    zoomSelect.style.display='block';
+    zoomSelect.style.left=x1+'px'; zoomSelect.style.width=(x2-x1)+'px';
+  }
+}, {passive:false});
+
+spectCanvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  clearTimeout(panLongPressTimer); hideTooltip();
+  const touch = e.changedTouches[0];
+
+  if (gesture==='playhead') {
+    if (wasPlayingBeforeDrag) startPlayback(playStartPos);
+    else updatePlayhead();
+    gesture=null; return;
+  }
+
+  if (gesture==='zoom-select') {
+    zoomSelect.style.display='none';
+    const t1=canvasX2Time(Math.min(gestureStartX,touch.clientX));
+    const t2=canvasX2Time(Math.max(gestureStartX,touch.clientX));
+    if (t2-t1>0.05) applyZoom(t1,t2);
+    gesture=null; return;
+  }
+
+  gesture=null;
+}, {passive:false});
+
+// Mouse
+let mouseDown=false, mouseGesture=null, mouseSelectStart=0;
+
+spectCanvas.addEventListener('mousedown', e => {
+  mouseDown=true; mouseSelectStart=e.clientX; mouseGesture=null;
+  const phX = playheadScreenX();
+  if (Math.abs(e.clientX - phX) < 12) {
+    mouseGesture='playhead';
+    wasPlayingBeforeDrag = isPlaying;
+    if (isPlaying) {
+      const pos=currentPos(); stopPlayback(); cancelAnimationFrame(animFrame);
+      isPlaying=false; playStartPos=pos;
+      btnPlay.textContent='▶'; btnPlay.classList.remove('playing');
+    }
+  }
+});
+
+spectCanvas.addEventListener('mousemove', e => {
+  if (!mouseDown) return;
+  const dx=e.clientX-mouseSelectStart;
+  if (mouseGesture==='playhead') {
+    playStartPos=Math.max(viewStart,Math.min(viewEnd,canvasX2Time(e.clientX)));
+    updatePlayhead(); return;
+  }
+  if (mouseGesture==='zoom-select' || (mouseGesture===null && Math.abs(dx)>8)) {
+    if (!mouseGesture) mouseGesture='zoom-select';
+    const rect=spectCanvas.getBoundingClientRect();
+    const x1=Math.min(mouseSelectStart,e.clientX)-rect.left;
+    const x2=Math.max(mouseSelectStart,e.clientX)-rect.left;
+    zoomSelect.style.display='block'; zoomSelect.style.left=x1+'px'; zoomSelect.style.width=(x2-x1)+'px';
+  }
+});
+
+spectCanvas.addEventListener('mouseup', e => {
+  if (!mouseDown) return; mouseDown=false;
+  if (mouseGesture==='playhead') {
+    if (wasPlayingBeforeDrag) startPlayback(playStartPos);
+    else updatePlayhead();
+  } else if (mouseGesture==='zoom-select') {
+    zoomSelect.style.display='none';
+    const t1=canvasX2Time(Math.min(mouseSelectStart,e.clientX));
+    const t2=canvasX2Time(Math.max(mouseSelectStart,e.clientX));
+    if (t2-t1>0.05) applyZoom(t1,t2);
+  } else {
+    seekTo(canvasX2Time(e.clientX));
+  }
+  mouseGesture=null;
+});
+
+spectCanvas.addEventListener('mouseleave', () => {
+  if (mouseGesture==='zoom-select'){zoomSelect.style.display='none';mouseGesture=null;mouseDown=false;}
+});
+
+// ── Controls ──────────────────────────────────────────────────
+btnPlay.addEventListener('click', togglePlay);
+
+btnHome.addEventListener('click', () => {
+  const was=isPlaying;
+  stopPlayback(); cancelAnimationFrame(animFrame);
+  isPlaying=false; btnPlay.textContent='▶'; btnPlay.classList.remove('playing');
+  playStartPos=viewStart; updatePlayhead();
+  if (was) startPlayback(viewStart);
+});
+
+btnLoop.addEventListener('click', () => {
+  isLoop=!isLoop; btnLoop.classList.toggle('active',isLoop);
+  // Restart with new loop setting if playing
+  if (isPlaying) {
+    const pos=currentPos();
+    stopPlayback(); cancelAnimationFrame(animFrame); isPlaying=false;
+    startPlayback(pos);
+  }
+});
+
+// Speed/algo/stereo: update state, launch background compute, never interrupt playback
+document.querySelectorAll('.speed-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.speed-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    const newSpeed = parseFloat(btn.dataset.speed);
+    if (newSpeed === playSpeed) return;
+    playSpeed = newSpeed;
+    stretchedBuffer = null; currentStretchKey = '';
+    cancelStretch = true;
+    setTimeout(() => {
+      cancelStretch = false; isStretching = false; pendingStretchKey = '';
+      if (playSpeed === 1.0) {
+        // Original buffer — switch immediately (no compute needed)
+        if (isPlaying) startPlayback(currentPos(), audioBuffer);
+      } else {
+        launchBackgroundStretch();
+      }
+    }, 30);
+  });
+});
+
+document.querySelectorAll('.algo-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.algo-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    algo = btn.dataset.algo;
+    if (playSpeed === 1.0) return;
+    stretchedBuffer = null; currentStretchKey = '';
+    cancelStretch = true;
+    setTimeout(() => {
+      cancelStretch = false; isStretching = false; pendingStretchKey = '';
+      launchBackgroundStretch();
+    }, 30);
+  });
+});
+
+$('toggle-stereo').addEventListener('click', function() {
+  stereoMode = !stereoMode; this.classList.toggle('active', stereoMode);
+  if (playSpeed === 1.0) return;
+  stretchedBuffer = null; currentStretchKey = '';
+  cancelStretch = true;
+  setTimeout(() => {
+    cancelStretch = false; isStretching = false; pendingStretchKey = '';
+    launchBackgroundStretch();
+  }, 30);
+});
+
+cancelBtn.addEventListener('click', () => {
+  cancelStretch = true; isStretching = false; hideProgress();
+  document.querySelectorAll('.speed-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelector('.speed-btn[data-speed="1"]').classList.add('active');
+  playSpeed = 1.0; stretchedBuffer = null; currentStretchKey = '';
+  if (isPlaying) startPlayback(currentPos(), audioBuffer);
+});
+
+// ── Resize ────────────────────────────────────────────────────
+let resizeTimer;
+window.addEventListener('resize',()=>{
+  clearTimeout(resizeTimer);
+  resizeTimer=setTimeout(()=>{if(spectrogramData){drawSpectrogram();drawAxes();updatePlayhead();}},100);
+});
+
+// ── Helpers ───────────────────────────────────────────────────
+function fmtTime(s) {
+  if (!isFinite(s)) return '0:00';
+  const m=Math.floor(s/60), sec=s%60;
+  return m+':'+(sec<10?'0':'')+sec.toFixed(1);
+}
+function showLoading(msg){loadingText.textContent=msg||'';loading.classList.add('show');}
+function hideLoading(){loading.classList.remove('show');}
+function showProgress(msg){progressWrap.style.display='block';progressBar.style.width='0%';progressLabel.textContent=msg||'';}
+function setProgress(pct,msg){progressBar.style.width=pct+'%';progressLabel.textContent=msg||pct+'%';}
+function hideProgress(){progressWrap.style.display='none';}
+function showTooltip(x,y,msg){tooltip.textContent=msg;tooltip.style.left=(x+12)+'px';tooltip.style.top=(y-24)+'px';tooltip.classList.add('show');}
+function hideTooltip(){tooltip.classList.remove('show');}
+
+document.addEventListener('keydown', e => {
+  if (!audioBuffer) return;
+  if (e.code==='Space'){e.preventDefault();togglePlay();}
+  if (e.code==='Home'){btnHome.click();}
+  if (e.code==='KeyL'){btnLoop.click();}
+  if (e.key==='Escape'){zoomClose();}
+  if (e.key==='ArrowLeft'&&zoomStack.length>0){zoomBack();}
+});
+
+// ── Init UI state ─────────────────────────────────────────────
+btnLoop.classList.toggle('active', isLoop);
+</script>
+</body>
+</html>

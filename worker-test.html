@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Worker Test</title></head>
+<body>
+<pre id="log"></pre>
+<script>
+function log(msg) { document.getElementById('log').textContent += msg + '\n'; }
+
+// Test 1: blob: URL worker
+log('Test 1: blob: URL worker');
+try {
+  var src = 'self.onmessage=function(e){ self.postMessage({ok:true, echo:e.data}); };';
+  var blob = new Blob([src], {type:'application/javascript'});
+  var url = URL.createObjectURL(blob);
+  log('  blob URL created: ' + url.slice(0,40) + '...');
+  var w = new Worker(url);
+  w.onmessage = function(e) { log('  BLOB WORKER OK: ' + JSON.stringify(e.data)); w.terminate(); runTest2(); };
+  w.onerror = function(e) { log('  BLOB WORKER ERROR: ' + e.message + ' line:' + e.lineno); runTest2(); };
+  setTimeout(function(){ log('  blob worker timeout (no response in 2s)'); runTest2(); }, 2000);
+  w.postMessage('hello');
+} catch(e) { log('  blob worker exception: ' + e.message); runTest2(); }
+
+function runTest2() {
+  // Test 2: data: URI worker
+  log('Test 2: data: URI worker');
+  try {
+    var src = 'self.onmessage=function(e){ self.postMessage({ok:true}); };';
+    var b64 = btoa(src);
+    var url = 'data:application/javascript;base64,' + b64;
+    var w = new Worker(url);
+    w.onmessage = function(e) { log('  DATA URI WORKER OK'); w.terminate(); runTest3(); };
+    w.onerror = function(e) { log('  DATA URI WORKER ERROR: ' + e.message); runTest3(); };
+    setTimeout(function(){ log('  data uri worker timeout'); runTest3(); }, 2000);
+    w.postMessage('hello');
+  } catch(e) { log('  data uri worker exception: ' + e.message); runTest3(); }
+}
+
+function runTest3() {
+  // Test 3: inline via Function() — does it at least run?
+  log('Test 3: Function() execution');
+  try {
+    var code = 'return 42 * 2;';
+    var result = new Function(code)();
+    log('  Function() result: ' + result);
+  } catch(e) { log('  Function() error: ' + e.message); }
+  
+  // Test 4: async/await + RAF yield — does progress update?
+  log('Test 4: async yield test');
+  var bar = document.createElement('div');
+  bar.style = 'width:0;height:20px;background:cyan;transition:none;margin-top:10px;';
+  document.body.appendChild(bar);
+  
+  async function runAsync() {
+    for(var i=0;i<100;i++) {
+      await new Promise(function(r){ requestAnimationFrame(function(){ setTimeout(r,0); }); });
+      bar.style.width = i + '%';
+      if(i % 10 === 0) log('  async step ' + i + '/100');
+    }
+    log('  async loop done');
+  }
+  runAsync();
+}
+</script>
+</body>
+</html>

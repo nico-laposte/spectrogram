@@ -31,6 +31,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 .em svg{opacity:.3}
 #ph{position:absolute;top:0;bottom:0;width:40px;transform:translateX(-50%);display:none;cursor:ew-resize;touch-action:none;z-index:10}
 #ph::after{content:'';position:absolute;top:0;bottom:0;left:50%;width:1.5px;transform:translateX(-50%);background:rgba(255,255,255,.7);box-shadow:0 0 6px rgba(255,255,255,.4)}
+#ph.praat::after{background:rgba(126,207,110,.9);box-shadow:0 0 6px rgba(126,207,110,.6)}
 .fl{position:absolute;left:4px;top:0;bottom:0;pointer-events:none}
 .fl span{position:absolute;font-size:8px;color:rgba(200,216,192,.45);transform:translateY(-50%)}
 .tl{position:absolute;bottom:4px;left:28px;right:8px;display:flex;justify-content:space-between;pointer-events:none}
@@ -2984,6 +2985,7 @@ function setDispMode(mode){
   btn.style.borderColor = praat ? 'var(--acc)' : 'var(--bdr)';
   btn.style.color       = praat ? 'var(--acc)' : 'var(--mut)';
   $('rowPraat').style.display = praat ? 'flex' : 'none';
+  ph.classList.toggle('praat', praat);
 }
 function setPraatRef(local){
   praatLocalRef = local;

@@ -189,6 +189,16 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
           <label>max</label><input type="number" id="ymax" value="8000" min="100" max="20000" step="100" onfocus="this.select()">
           <span style="color:var(--mut);font-size:9px">Hz</span>
           <button id="scaleToggle" title="Basculer linéaire/logarithmique" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:9px;cursor:pointer">Lin</button>
+          <button id="dispToggle" title="Affichage : vert / Praat (niveaux de gris, dB)" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:8px;cursor:pointer">Vert</button>
+        </div>
+      </div>
+      <div class="row" id="rowPraat" style="display:none">
+        <div class="rl">Praat</div>
+        <div class="fic">
+          <label title="Plage dynamique (dB)">dyn</label><input type="number" id="praatDynIn" value="50" min="10" max="120" step="5" style="width:48px" onfocus="this.select()">
+          <label title="Durée effective de la fenêtre (ms)">fen</label><input type="number" id="praatWinIn" value="5" min="1" max="40" step="1" style="width:48px" onfocus="this.select()">
+          <label title="Pré-accentuation (dB/octave)">pré</label><input type="number" id="praatPreIn" value="6" min="0" max="18" step="1" style="width:48px" onfocus="this.select()">
+          <button id="refToggle" title="Référence de normalisation : vue courante / fichier entier" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:9px;cursor:pointer">Vue</button>
         </div>
       </div>
       <div class="row" id="rowPitch">
@@ -380,7 +390,9 @@ async function analyze(job){
   const bins = FFTN/2;
   const maxBin = Math.min(bins-1, Math.floor(MFREQ/(sr/2)*bins));
   const cols = Math.min(NCOLS, W*2);
-  const win  = hann(FFTN);
+  // Fenêtre d'analyse : Hann pleine longueur (vert) ou gaussienne courte (Praat)
+  const win  = dispMode==='praat' ? gaussWin(FFTN, sr, praatWinMs) : hann(FFTN);
+  const sumW = sumWindow(win);
   const out  = new Float32Array(cols*maxBin);
   let gMax=0;
 
@@ -404,7 +416,7 @@ async function analyze(job){
   }
   if(job!==busy) return setOv(false);
 
-  spec={out,cols,maxBin,gMax};
+  spec={out,cols,maxBin,gMax,sumW};
   try{
     drawSpec(W,H);
     if(multiPitch || pitchAlgo==='multi'){
@@ -464,6 +476,28 @@ function fftMag(data,start,N,win,maxBin){
 
 function hann(N){const w=new Float32Array(N);for(let i=0;i<N;i++)w[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));return w;}
 
+// Fenêtre gaussienne de Praat, de durée EFFECTIVE msEff : la durée physique
+// vaut le double (comme dans Praat), et la fenêtre est centrée puis complétée
+// par des zéros dans les N points de la FFT. Le zero-padding donne la
+// résolution temporelle voulue sans changer la taille de la FFT ni maxBin.
+function gaussWin(N, sr, msEff){
+  const w = new Float32Array(N);
+  let L = Math.round(2 * msEff / 1000 * sr);   // longueur physique en échantillons
+  if(L < 8) L = 8;
+  if(L > N) L = N;                             // au-delà, la fenêtre sature la FFT
+  const start = Math.floor((N - L) / 2);
+  const mid = 0.5 * (L + 1), edge = Math.exp(-12);
+  for(let i=1; i<=L; i++){
+    const d = (i - mid) / (L + 1);
+    w[start + i - 1] = (Math.exp(-48 * d * d) - edge) / (1 - edge);
+  }
+  return w;
+}
+
+// Somme d'une fenêtre — sert à comparer des magnitudes issues de fenêtres
+// de longueurs différentes (gain cohérent).
+function sumWindow(w){ let s=0; for(let i=0;i<w.length;i++) s+=w[i]; return s||1; }
+
 // ── DRAW ──────────────────────────────────────────────────────────────────
 // Conversion Hz ↔ position Y selon l'échelle (linéaire ou log)
 let FMIN_LOG = 80;   // borne basse de l'échelle log (Hz) — dynamique en mode musique
@@ -478,9 +512,63 @@ function yToHz(y, H){
   return Math.pow(2, lo + (1 - y/H) * (hi - lo));
 }
 
+// ── MODE PRAAT : dB, gris inversé, pré-accentuation ───────────────────────
+// Gain de pré-accentuation en dB à la fréquence hz. La fréquence de référence
+// (1 kHz) est arbitraire : c'est un décalage constant, absorbé par la
+// normalisation au maximum.
+function preemphDb(hz){
+  if(praatPreemph <= 0) return 0;
+  return praatPreemph * Math.log2(Math.max(hz, 50) / 1000);
+}
+
+// Référence de normalisation « Vue » : maximum de la fenêtre affichée,
+// après pré-accentuation. C'est le comportement de Praat (l'image se
+// réétalonne à chaque zoom).
+function praatRefLocal(){
+  const {out, cols, maxBin} = spec;
+  const g = new Float32Array(maxBin);
+  for(let b=0;b<maxBin;b++) g[b] = Math.pow(10, preemphDb((b+0.5)/maxBin*MFREQ)/20);
+  let m=0;
+  for(let c=0;c<cols;c++){
+    const off=c*maxBin;
+    for(let b=0;b<maxBin;b++){ const v=out[off+b]*g[b]; if(v>m) m=v; }
+  }
+  return m;
+}
+
+// Référence « Glob » : maximum du fichier entier, estimé au chargement par
+// computeSpecFull(). Comme la pré-accentuation est un gain constant par bin,
+// max_t max_b (m·g) = max_b (g · max_t m) : le max par bin mémorisé suffit,
+// aucune FFT à refaire quand la pré-accentuation change.
+// Le scan utilise une fenêtre de Hann 2048, plus longue que la gaussienne de
+// Praat : on corrige le rapport des gains cohérents (somme des fenêtres).
+// Correction exacte pour un signal tonal, approchée sur les transitoires.
+function praatRefGlobal(){
+  if(!specFull || !specFull.gMaxHiBins) return praatRefLocal();
+  const bins = specFull.gMaxHiBins, df = specFull.gMaxHiDf;
+  let m=0;
+  for(let b=0;b<bins.length;b++){
+    const v = bins[b] * Math.pow(10, preemphDb((b+0.5)*df)/20);
+    if(v>m) m=v;
+  }
+  return m * ((spec.sumW||1) / (specFull.gMaxHiSumW||1));
+}
+
+const LN_TO_DB = 8.685889638065035;   // 20/ln(10)
+
 function drawSpec(W,H){
   const {out,cols,maxBin,gMax}=spec;
   const ctx=sc.getContext('2d'), img=ctx.createImageData(W,H), px=img.data;
+  const praat = dispMode==='praat';
+  // En mode Praat, le gain de pré-accentuation ne dépend que de y : on le
+  // précalcule une fois par ligne de pixels au lieu d'une fois par pixel.
+  let gainY=null, ref=1, invDyn=1;
+  if(praat){
+    gainY = new Float32Array(H);
+    for(let y=0;y<H;y++) gainY[y] = Math.pow(10, preemphDb(yToHz(y,H))/20);
+    ref = (praatLocalRef ? praatRefLocal() : praatRefGlobal()) || 1;
+    invDyn = 1/Math.max(1, praatDyn);
+  }
   for(let x=0;x<W;x++){
     const ci=Math.min(Math.floor(x/W*cols),cols-1), off=ci*maxBin;
     for(let y=0;y<H;y++){
@@ -490,7 +578,14 @@ function drawSpec(W,H){
       const b1 = Math.min(b0+1, maxBin-1);
       const t  = binF - b0;                  // fraction pour interpolation
       const val = (out[off+b0]||0)*(1-t) + (out[off+b1]||0)*t;
-      const [r,g,b]=color(val/(gMax||1));
+      let r,g,b;
+      if(praat){
+        const db = LN_TO_DB * Math.log(val*gainY[y]/ref + 1e-12);
+        const u  = Math.max(0, Math.min(1, 1 + db*invDyn));   // 0 à -dyn dB, 1 au max
+        r = g = b = Math.round(255*(1-u));                    // gris inversé
+      } else {
+        [r,g,b]=color(val/(gMax||1));
+      }
       const i=(y*W+x)*4; px[i]=r;px[i+1]=g;px[i+2]=b;px[i+3]=255;
     }
   }
@@ -1622,6 +1717,12 @@ async function computeGMaxHi(){
 let playBuf = null;           // buffer actuellement joué (abuf ou version étirée)
 let stretchMode = 'oiseau';   // 'oiseau' | 'voix' | 'musique'
 let logScale  = false;        // true = axe Y logarithmique
+// ── AFFICHAGE DU SPECTROGRAMME ────────────────────────────────────────────
+let dispMode      = 'vert';   // 'vert' (dégradé, amplitude^0.35) | 'praat' (gris inversé, dB)
+let praatDyn      = 50;       // plage dynamique en dB sous le maximum
+let praatWinMs    = 5;        // durée effective de la fenêtre gaussienne (ms)
+let praatPreemph  = 6;        // pré-accentuation en dB/octave
+let praatLocalRef = true;     // true = réf. sur la vue courante, false = fichier entier
 let multiPitch = false;       // true = détection multi-notes (mode musique)
 let stretchAlgo = 'wsola-oiseau';  // 'wsola-oiseau' | 'wsola-musique' | 'pv'
 let stereo = false;  // traitement stéréo du time-stretching
@@ -1712,6 +1813,23 @@ function drawSpecFromFull(vs, ve){
   const img=ctx.createImageData(W,H), px=img.data;
   // specFull.maxBin couvre jusqu'à Nyquist — utiliser sr/2 pour le mapping
   const nyquist = abuf.sampleRate / 2;
+  // Même rendu qu'en vue normale pour éviter un clignotement pendant le
+  // glissement — la référence est celle du spectrogramme basse résolution,
+  // donc cohérente avec ses propres magnitudes.
+  const praat = dispMode==='praat';
+  let gainY=null, ref=1, invDyn=1;
+  if(praat){
+    gainY = new Float32Array(H);
+    for(let y=0;y<H;y++) gainY[y] = Math.pow(10, preemphDb(yToHz(y,H))/20);
+    const lo = specFull.loMaxBins;
+    ref = 0;
+    if(lo) for(let b=0;b<lo.length;b++){
+      const v = lo[b] * Math.pow(10, preemphDb((b+0.5)/maxBin*nyquist)/20);
+      if(v>ref) ref = v;
+    }
+    if(!(ref>0)) ref = gMax||1;
+    invDyn = 1/Math.max(1, praatDyn);
+  }
   for(let x=0; x<W; x++){
     const t = vs + (x/W) * (ve-vs);
     const ci = Math.min(Math.floor(t/totalDur * cols), cols-1);
@@ -1723,7 +1841,14 @@ function drawSpecFromFull(vs, ve){
       const b1 = Math.min(b0+1, maxBin-1);
       const tf  = binF - b0;
       const val = (out[off+b0]||0)*(1-tf) + (out[off+b1]||0)*tf;
-      const [r,g,b]=color(val/(gMax||1));
+      let r,g,b;
+      if(praat){
+        const db = LN_TO_DB * Math.log(val*gainY[y]/ref + 1e-12);
+        const u  = Math.max(0, Math.min(1, 1 + db*invDyn));
+        r = g = b = Math.round(255*(1-u));
+      } else {
+        [r,g,b]=color(val/(gMax||1));
+      }
       const i=(y*W+x)*4; px[i]=r; px[i+1]=g; px[i+2]=b; px[i+3]=255;
     }
   }
@@ -1758,15 +1883,29 @@ async function computeSpecFull(){
   const maxBinHi = Math.min(binsHi-1, Math.floor(MFREQ/(sr/2)*binsHi));
   const winHi = hann(FFTN_HI);
   let gMaxHi = 0;
+  // Max par bin sur tout le fichier : sert de référence « Glob » en mode Praat
+  const gMaxHiBins = new Float32Array(maxBinHi);
   const COLS_SCAN = 50;
   for(let c=0; c<COLS_SCAN; c++){
     if(c % 10 === 0) await tick(1);
     const start = Math.floor(c / COLS_SCAN * (total - FFTN_HI));
     const m = fftMag(data, start, FFTN_HI, winHi, maxBinHi);
-    for(let b=0; b<maxBinHi; b++) if(m[b]>gMaxHi) gMaxHi=m[b];
+    for(let b=0; b<maxBinHi; b++){
+      if(m[b]>gMaxHi) gMaxHi=m[b];
+      if(m[b]>gMaxHiBins[b]) gMaxHiBins[b]=m[b];
+    }
   }
 
-  specFull = {out, cols:COLS_LO, maxBin, gMax, gMaxHi, dur};
+  // Max par bin du spectrogramme basse résolution : référence Praat pour
+  // l'aperçu pendant le glissement (drawSpecFromFull)
+  const loMaxBins = new Float32Array(maxBin);
+  for(let c=0;c<COLS_LO;c++){
+    const off=c*maxBin;
+    for(let b=0;b<maxBin;b++) if(out[off+b]>loMaxBins[b]) loMaxBins[b]=out[off+b];
+  }
+
+  specFull = {out, cols:COLS_LO, maxBin, gMax, gMaxHi, dur,
+              gMaxHiBins, gMaxHiDf:(sr/2)/binsHi, gMaxHiSumW:sumWindow(winHi), loMaxBins};
 
   // Détection automatique du mode — specFull est maintenant prêt
   autoDetectMode();
@@ -2835,6 +2974,48 @@ async function applyScaleOrPitch(){
   await analyze(busy);
 }
 $('scaleToggle').addEventListener('click',  async()=>{ setScaleLog(!logScale);     await applyScaleOrPitch(); });
+
+// ── AFFICHAGE VERT / PRAAT ────────────────────────────────────────────────
+function setDispMode(mode){
+  dispMode = mode;
+  const praat = mode==='praat';
+  const btn = $('dispToggle');
+  btn.textContent   = praat ? 'Praat' : 'Vert';
+  btn.style.borderColor = praat ? 'var(--acc)' : 'var(--bdr)';
+  btn.style.color       = praat ? 'var(--acc)' : 'var(--mut)';
+  $('rowPraat').style.display = praat ? 'flex' : 'none';
+}
+function setPraatRef(local){
+  praatLocalRef = local;
+  const btn = $('refToggle');
+  btn.textContent   = local ? 'Vue' : 'Glob';
+  btn.style.borderColor = local ? 'var(--bdr)' : 'var(--acc)';
+  btn.style.color       = local ? 'var(--mut)' : 'var(--acc)';
+}
+// Redessine le seul spectrogramme, sans refaire les FFT : suffit pour la
+// plage dynamique, la pré-accentuation et la référence de normalisation.
+function redrawSpecOnly(){
+  if(!abuf || !drawn || !spec) return;
+  drawSpec(sc.width, sc.height);
+}
+function clampNum(el, lo, hi, def){
+  let v = parseFloat(el.value);
+  if(isNaN(v)) v = def;
+  v = Math.max(lo, Math.min(hi, v));
+  el.value = v;
+  return v;
+}
+$('dispToggle').addEventListener('click', async()=>{
+  setDispMode(dispMode==='praat' ? 'vert' : 'praat');
+  await applyScaleOrPitch();          // la fenêtre d'analyse change → ré-analyse
+});
+$('refToggle').addEventListener('click', ()=>{ setPraatRef(!praatLocalRef); redrawSpecOnly(); });
+$('praatDynIn').addEventListener('change', ()=>{ praatDyn     = clampNum($('praatDynIn'),10,120,50); redrawSpecOnly(); });
+$('praatPreIn').addEventListener('change', ()=>{ praatPreemph = clampNum($('praatPreIn'),0,18,6);    redrawSpecOnly(); });
+$('praatWinIn').addEventListener('change', async()=>{             // → ré-analyse
+  praatWinMs = clampNum($('praatWinIn'),1,40,5);
+  await applyScaleOrPitch();
+});
 $('pitchToggle').addEventListener('click', async()=>{
   const idx = PITCH_CYCLE.indexOf(pitchAlgo);
   setPitchAlgo(PITCH_CYCLE[(idx+1) % PITCH_CYCLE.length]);

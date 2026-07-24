@@ -304,6 +304,10 @@ async function load(source){
 
   dur = abuf.duration;
   viewStart = 0; viewEnd = dur; offset = 0;
+  // Boucle activée par défaut sauf pour les fichiers très courts (< 5 s),
+  // où on suppose un extrait ponctuel à écouter une fois.
+  looping = dur >= 5;
+  loopBtn.classList.toggle('on', looping);
   zoomHistory = [];
   setZoomBadge(false);
   showPhrases = false;
@@ -1985,7 +1989,7 @@ function autoDetectMode(){
     ymin.value=80; ymax.value=8000; applyAxis();
     pmin.value=1000; pmax.value=8000;
     showNotes=true; ntg.classList.add('on');
-    setScaleLog(false); setMultiPitch(false); setPitchAlgo('peak');
+    setScaleLog(false); setMultiPitch(false); setPitchAlgo('yin');
     setAlgo('wsola-oiseau');
     $('rowFormants').style.display='none';
     showChordStrip(false);
@@ -2005,7 +2009,7 @@ function autoDetectMode(){
     ymin.value=80; ymax.value=8000; applyAxis();
     pmin.value=80; pmax.value=1100;
     showNotes=false; ntg.classList.remove('on');
-    setScaleLog(true); setMultiPitch(false); setPitchAlgo('peak');
+    setScaleLog(true); setMultiPitch(false); setPitchAlgo('yin');
     setAlgo('pv');
     $('rowFormants').style.display='flex';
     showChordStrip(false);
@@ -3095,7 +3099,7 @@ document.getElementById('modeOiseau').addEventListener('click',async()=>{
   stretchMode='oiseau';
   ymin.value=80; ymax.value=8000; applyAxis();
   pmin.value=1000; pmax.value=8000;
-  setScaleLog(false); setMultiPitch(false); setPitchAlgo('peak');
+  setScaleLog(false); setMultiPitch(false); setPitchAlgo('yin');
   document.getElementById('modeOiseau').classList.add('on');
   document.getElementById('modeVoix').classList.remove('on');
   document.getElementById('modeMusique').classList.remove('on');
@@ -3117,7 +3121,7 @@ document.getElementById('modeVoix').addEventListener('click',async()=>{
   stretchMode='voix';
   ymin.value=80; ymax.value=8000; applyAxis();
   pmin.value=80; pmax.value=1100;
-  setScaleLog(true); setMultiPitch(false); setPitchAlgo('peak');
+  setScaleLog(true); setMultiPitch(false); setPitchAlgo('yin');
   document.getElementById('modeVoix').classList.add('on');
   document.getElementById('modeOiseau').classList.remove('on');
   document.getElementById('modeMusique').classList.remove('on');

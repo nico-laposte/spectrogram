@@ -2458,7 +2458,8 @@ function timeStretchSync(samples, mode, factor){
 }
 
 // Version async — pause toutes les N frames pour ne pas bloquer l'UI
-async function timeStretchSyncAsync(samples, mode, factor, pctMin=0, pctMax=95){
+// silent : ne pas toucher à l'overlay de progression (l'appelant ne l'a pas affiché)
+async function timeStretchSyncAsync(samples, mode, factor, pctMin=0, pctMax=95, silent=false){
   if(mode === 'voix'){
     // Phase vocoder async (déjà implémenté)
     const N=samples.length;
@@ -2510,7 +2511,7 @@ async function timeStretchSyncAsync(samples, mode, factor, pctMin=0, pctMax=95){
       for(let i=0;i<fftSize;i++){out[synPos+i]+=nRe[i]*w[i];winSum[synPos+i]+=w[i]*w[i];}
       anaPos+=hop; synPos+=synHop; frameCount++;
       if(frameCount%50===0){
-        setOv(true, undefined, Math.round(pctMin + (pctMax-pctMin)*frameCount/totalFrames));
+        if(!silent) setOv(true, undefined, Math.round(pctMin + (pctMax-pctMin)*frameCount/totalFrames));
         await tick(0);
         if(_stretchCancelled) return null;
       }
@@ -2553,7 +2554,7 @@ async function timeStretchSyncAsync(samples, mode, factor, pctMin=0, pctMax=95){
       inPos+=analysisHop; outPos+=synthesisHop;
       frameCount++;
       if(frameCount%200===0){
-        setOv(true, undefined, Math.round(pctMin + (pctMax-pctMin)*frameCount/totalFrames));
+        if(!silent) setOv(true, undefined, Math.round(pctMin + (pctMax-pctMin)*frameCount/totalFrames));
         await tick(0);
         if(_stretchCancelled) return null;
       }
@@ -2621,7 +2622,7 @@ async function getPlayBuffer(spd, silent=false){
       });
     }
     if(!result && !_wasCancelled){
-      result = await timeStretchSyncAsync(samples, algoMode, factor);
+      result = await timeStretchSyncAsync(samples, algoMode, factor, 0, 95, silent);
     }
     return result || null;
   }
@@ -2632,10 +2633,10 @@ async function getPlayBuffer(spd, silent=false){
     const right = new Float32Array(abuf.getChannelData(1));
     // Utiliser le fallback async pour les deux canaux — le Worker ne peut pas
     // être appelé deux fois de suite avec des buffers transférés
-    const strL = await timeStretchSyncAsync(left,  algoMode, factor, 0,  50);
-    if(!strL || _stretchCancelled){ cancelBtn.style.display='none'; if(!silent) setOv(false); return null; }
-    const strR = await timeStretchSyncAsync(right, algoMode, factor, 50, 100);
-    if(!strR || _stretchCancelled){ cancelBtn.style.display='none'; if(!silent) setOv(false); return null; }
+    const strL = await timeStretchSyncAsync(left,  algoMode, factor, 0,  50, silent);
+    if(!strL || _stretchCancelled){ cancelBtn.style.display='none'; setOv(false); return null; }
+    const strR = await timeStretchSyncAsync(right, algoMode, factor, 50, 100, silent);
+    if(!strR || _stretchCancelled){ cancelBtn.style.display='none'; setOv(false); return null; }
     buf = actx.createBuffer(2, strL.length, abuf.sampleRate);
     buf.getChannelData(0).set(strL);
     buf.getChannelData(1).set(strR);
@@ -2643,7 +2644,7 @@ async function getPlayBuffer(spd, silent=false){
     // Mono (comportement d'origine)
     const mono = monoMix(abuf);
     const stretched = await stretchChannel(mono);
-    if(!stretched){ cancelBtn.style.display='none'; if(!silent) setOv(false); return abuf; }
+    if(!stretched){ cancelBtn.style.display='none'; setOv(false); return abuf; }
     buf = actx.createBuffer(1, stretched.length, abuf.sampleRate);
     buf.getChannelData(0).set(stretched);
   }
@@ -2651,7 +2652,7 @@ async function getPlayBuffer(spd, silent=false){
   if(keys.length >= STRETCH_CACHE_MAX) delete stretchCache[keys[0]];
   stretchCache[key]=buf;
   cancelBtn.style.display='none';
-  if(!silent) setOv(false);
+  setOv(false);   // inconditionnel : garantit qu'aucun chemin ne laisse l'overlay bloqué
   return buf;
 }
 

@@ -210,6 +210,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
           <label>max</label><input type="number" id="pmax" value="8000" min="100" max="12000" step="100" onfocus="this.select()">
           <span style="color:var(--mut);font-size:9px">Hz</span>
           <button id="pitchToggle" title="Basculer mono/multi" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:9px;cursor:pointer">Mono</button>
+          <button id="curveAxisToggle" title="Échelle de la courbe : celle du spectrogramme ou min/max Pitch" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:8px;cursor:pointer">Spec</button>
+          <button id="curveLogToggle" title="Courbe : échelle linéaire ou logarithmique" style="display:none;flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:9px;cursor:pointer">Lin</button>
         </div>
       </div>
       <div class="row">
@@ -517,6 +519,17 @@ function yToHz(y, H){
   return Math.pow(2, lo + (1 - y/H) * (hi - lo));
 }
 
+// Positionnement de la courbe de pitch — indépendant de l'axe du spectrogramme
+// quand curveAxisMode==='pitch' : bornée par pmin/pmax au lieu de FMIN_LOG/MFREQ.
+function hzToYCurve(hz, H){
+  if(curveAxisMode !== 'pitch') return hzToY(hz, H);
+  const p1 = (v=>isNaN(v)?FMIN_LOG:v)(parseInt(pmin.value));
+  const p2 = (v=>isNaN(v)?MFREQ:v)(parseInt(pmax.value));
+  if(!curveLogScale) return (1 - (hz - p1)/(p2 - p1)) * H;
+  const lo=Math.log2(Math.max(p1,1)), hi=Math.log2(Math.max(p2,p1+1));
+  return (1 - (Math.log2(Math.max(hz,p1)) - lo) / (hi - lo)) * H;
+}
+
 // ── MODE PRAAT : dB, gris inversé, pré-accentuation ───────────────────────
 // Gain de pré-accentuation en dB à la fréquence hz. La fréquence de référence
 // (1 kHz) est arbitraire : c'est un décalage constant, absorbé par la
@@ -813,7 +826,7 @@ function drawCurveMusic(H){
   const ctx=pc.getContext('2d'), W=pc.width;
   ctx.clearRect(0,0,W,H);
   if(!curveMusic.length) return;
-  const yOf=hz=>hzToY(hz,H);
+  const yOf=hz=>hzToYCurve(hz,H);
 
   // Points de la courbe — respecte showP
   if(showP){
@@ -1338,7 +1351,7 @@ function drawCurve(H){
   const ctx=pc.getContext('2d'), W=pc.width; H=H||pc.height;
   ctx.clearRect(0,0,W,H);
   if(!curve.length) return;
-  const yOf=hz=>hzToY(hz,H);
+  const yOf=hz=>hzToYCurve(hz,H);
 
   if(showP){
     const p1=(v=>isNaN(v)?1000:v)(parseInt(pmin.value)), p2=(v=>isNaN(v)?8000:v)(parseInt(pmax.value));
@@ -1721,7 +1734,12 @@ async function computeGMaxHi(){
 }
 let playBuf = null;           // buffer actuellement joué (abuf ou version étirée)
 let stretchMode = 'oiseau';   // 'oiseau' | 'voix' | 'musique'
-let logScale  = false;        // true = axe Y logarithmique
+let logScale  = false;        // true = axe Y logarithmique (spectrogramme)
+// ── ÉCHELLE DE LA COURBE DE PITCH ─────────────────────────────────────────
+// 'spec'  : la courbe suit l'axe du spectrogramme (FMIN_LOG/MFREQ, logScale)
+// 'pitch' : la courbe a sa propre échelle, bornée par pmin/pmax (Praat-like)
+let curveAxisMode = 'spec';
+let curveLogScale = false;    // linéaire/log, ne s'applique qu'en mode 'pitch'
 // ── AFFICHAGE DU SPECTROGRAMME ────────────────────────────────────────────
 let dispMode      = 'vert';   // 'vert' (dégradé, amplitude^0.35) | 'praat' (gris inversé, dB)
 let praatDyn      = 50;       // plage dynamique en dB sous le maximum
@@ -1745,7 +1763,7 @@ function drawCurveFromFull(vs, ve){
   const winLen = ve - vs;
   const snapLen = slideVESnapshot - slideVSSnapshot;
   if(winLen<=0 || snapLen<=0) return;
-  const yOf=hz=>hzToY(hz,H);
+  const yOf=hz=>hzToYCurve(hz,H);
 
   if(multiPitch || pitchAlgo==='multi'){
     ctx.fillStyle='rgba(255,80,80,.9)';
@@ -3022,6 +3040,35 @@ $('praatWinIn').addEventListener('change', async()=>{             // → ré-ana
   praatWinMs = clampNum($('praatWinIn'),1,40,5);
   await applyScaleOrPitch();
 });
+
+// ── ÉCHELLE DE LA COURBE DE PITCH (indépendante du spectrogramme) ─────────
+function redrawCurveOnly(){
+  if(!drawn) return;
+  if(stretchMode==='musique') drawCurveMusic(pc.height);
+  else drawCurve(pc.height);
+  if(typeof drawHighlight==='function') drawHighlight();
+}
+function setCurveAxisMode(mode){
+  curveAxisMode = mode;
+  const pitch = mode==='pitch';
+  const btn = $('curveAxisToggle');
+  btn.textContent   = pitch ? 'Pitch' : 'Spec';
+  btn.style.borderColor = pitch ? 'var(--acc)' : 'var(--bdr)';
+  btn.style.color       = pitch ? 'var(--acc)' : 'var(--mut)';
+  $('curveLogToggle').style.display = pitch ? 'inline-block' : 'none';
+}
+function setCurveLog(log){
+  curveLogScale = log;
+  const btn = $('curveLogToggle');
+  btn.textContent = log ? 'Log' : 'Lin';
+  btn.style.borderColor = log ? 'var(--acc)' : 'var(--bdr)';
+  btn.style.color       = log ? 'var(--acc)' : 'var(--mut)';
+}
+$('curveAxisToggle').addEventListener('click', ()=>{
+  setCurveAxisMode(curveAxisMode==='pitch' ? 'spec' : 'pitch');
+  redrawCurveOnly();
+});
+$('curveLogToggle').addEventListener('click', ()=>{ setCurveLog(!curveLogScale); redrawCurveOnly(); });
 $('pitchToggle').addEventListener('click', async()=>{
   const idx = PITCH_CYCLE.indexOf(pitchAlgo);
   setPitchAlgo(PITCH_CYCLE[(idx+1) % PITCH_CYCLE.length]);
@@ -3611,7 +3658,7 @@ function drawHighlight(){
     for(const frame of curveMusic){
       for(const n of frame.notes){
         if(((n.midi%12)+12)%12===pianoNote){
-          ctx.beginPath(); ctx.arc(frame.t*W, hzToY(n.hz,H), 5,0,6.283); ctx.fill();
+          ctx.beginPath(); ctx.arc(frame.t*W, hzToYCurve(n.hz,H), 5,0,6.283); ctx.fill();
         }
       }
     }
@@ -3620,7 +3667,7 @@ function drawHighlight(){
       if(!p) continue;
       const note=hzToNote(p.hz);
       if(note && ((note.midi%12)+12)%12===pianoNote){
-        ctx.beginPath(); ctx.arc(p.t*W, hzToY(p.hz,H), 5,0,6.283); ctx.fill();
+        ctx.beginPath(); ctx.arc(p.t*W, hzToYCurve(p.hz,H), 5,0,6.283); ctx.fill();
       }
     }
   }

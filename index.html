@@ -190,7 +190,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
           <label>max</label><input type="number" id="ymax" value="8000" min="100" max="20000" step="100" onfocus="this.select()">
           <span style="color:var(--mut);font-size:9px">Hz</span>
           <button id="scaleToggle" title="Basculer linéaire/logarithmique" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:9px;cursor:pointer">Lin</button>
-          <button id="dispToggle" title="Affichage : vert / Praat (niveaux de gris, dB)" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:8px;cursor:pointer">Vert</button>
+          <button id="dispToggle" title="Affichage : vert / Praat (gris, dB) / Magma" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:8px;cursor:pointer">Vert</button>
         </div>
       </div>
       <div class="row" id="rowPraat" style="display:none">
@@ -578,6 +578,7 @@ function drawSpec(W,H){
   const {out,cols,maxBin,gMax}=spec;
   const ctx=sc.getContext('2d'), img=ctx.createImageData(W,H), px=img.data;
   const praat = dispMode==='praat';
+  const magma = dispMode==='magma';
   // En mode Praat, le gain de pré-accentuation ne dépend que de y : on le
   // précalcule une fois par ligne de pixels au lieu d'une fois par pixel.
   let gainY=null, ref=1, invDyn=1;
@@ -587,6 +588,7 @@ function drawSpec(W,H){
     ref = (praatLocalRef ? praatRefLocal() : praatRefGlobal()) || 1;
     invDyn = 1/Math.max(1, praatDyn);
   }
+  const logGMax = magma ? Math.log1p(gMax||1)||1 : 1;
   for(let x=0;x<W;x++){
     const ci=Math.min(Math.floor(x/W*cols),cols-1), off=ci*maxBin;
     for(let y=0;y<H;y++){
@@ -601,6 +603,8 @@ function drawSpec(W,H){
         const db = LN_TO_DB * Math.log(val*gainY[y]/ref + 1e-12);
         const u  = Math.max(0, Math.min(1, 1 + db*invDyn));   // 0 à -dyn dB, 1 au max
         r = g = b = Math.round(255*(1-u));                    // gris inversé
+      } else if(magma){
+        [r,g,b]=magmaColor(Math.log1p(val)/logGMax);
       } else {
         [r,g,b]=color(val/(gMax||1));
       }
@@ -1706,6 +1710,17 @@ function color(t){
   return[255,240,180];
 }
 
+// Palette Magma (matplotlib), 8 points de contrôle interpolés linéairement.
+// t est déjà compressé en amont (log1p/log1p(max)) — pas de gamma ici.
+const MAGMA_STOPS=[[0,[0,0,4]],[.14,[40,11,84]],[.29,[101,21,110]],[.43,[159,42,99]],
+                    [.57,[212,72,66]],[.71,[245,125,52]],[.86,[252,193,118]],[1,[252,253,191]]];
+function magmaColor(t){
+  t=Math.max(0,Math.min(1,t));
+  const s=MAGMA_STOPS;
+  for(let i=1;i<s.length;i++){if(t<=s[i][0]){const lo=s[i-1][1],hi=s[i][1],f=(t-s[i-1][0])/(s[i][0]-s[i-1][0]);return[lo[0]+f*(hi[0]-lo[0]),lo[1]+f*(hi[1]-lo[1]),lo[2]+f*(hi[2]-lo[2])].map(Math.round);}}
+  return[252,253,191];
+}
+
 // ── PLAYBACK ──────────────────────────────────────────────────────────────
 // ── TIME-STRETCH (OLA, hauteur préservée) ───────────────────────────────────
 // Cache des buffers ralentis par vitesse. ×1 = abuf direct (pas de traitement).
@@ -1840,6 +1855,7 @@ function drawSpecFromFull(vs, ve){
   // glissement — la référence est celle du spectrogramme basse résolution,
   // donc cohérente avec ses propres magnitudes.
   const praat = dispMode==='praat';
+  const magma = dispMode==='magma';
   let gainY=null, ref=1, invDyn=1;
   if(praat){
     gainY = new Float32Array(H);
@@ -1853,6 +1869,7 @@ function drawSpecFromFull(vs, ve){
     if(!(ref>0)) ref = gMax||1;
     invDyn = 1/Math.max(1, praatDyn);
   }
+  const logGMax = magma ? Math.log1p(gMax||1)||1 : 1;
   for(let x=0; x<W; x++){
     const t = vs + (x/W) * (ve-vs);
     const ci = Math.min(Math.floor(t/totalDur * cols), cols-1);
@@ -1869,6 +1886,8 @@ function drawSpecFromFull(vs, ve){
         const db = LN_TO_DB * Math.log(val*gainY[y]/ref + 1e-12);
         const u  = Math.max(0, Math.min(1, 1 + db*invDyn));
         r = g = b = Math.round(255*(1-u));
+      } else if(magma){
+        [r,g,b]=magmaColor(Math.log1p(val)/logGMax);
       } else {
         [r,g,b]=color(val/(gMax||1));
       }
@@ -2999,16 +3018,17 @@ async function applyScaleOrPitch(){
 }
 $('scaleToggle').addEventListener('click',  async()=>{ setScaleLog(!logScale);     await applyScaleOrPitch(); });
 
-// ── AFFICHAGE VERT / PRAAT ────────────────────────────────────────────────
+// ── AFFICHAGE VERT / PRAAT / MAGMA ────────────────────────────────────────
+const DISP_LABELS = {vert:'Vert', praat:'Praat', magma:'Magma'};
 function setDispMode(mode){
   dispMode = mode;
   const praat = mode==='praat';
   const btn = $('dispToggle');
-  btn.textContent   = praat ? 'Praat' : 'Vert';
-  btn.style.borderColor = praat ? 'var(--acc)' : 'var(--bdr)';
-  btn.style.color       = praat ? 'var(--acc)' : 'var(--mut)';
+  btn.textContent   = DISP_LABELS[mode];
+  btn.style.borderColor = mode==='vert' ? 'var(--bdr)' : 'var(--acc)';
+  btn.style.color       = mode==='vert' ? 'var(--mut)' : 'var(--acc)';
   $('rowPraat').style.display = praat ? 'flex' : 'none';
-  ph.classList.toggle('praat', praat);
+  ph.classList.toggle('praat', praat);   // curseur vert : Praat seulement, fond blanc oblige
 }
 function setPraatRef(local){
   praatLocalRef = local;
@@ -3031,8 +3051,11 @@ function clampNum(el, lo, hi, def){
   return v;
 }
 $('dispToggle').addEventListener('click', async()=>{
-  setDispMode(dispMode==='praat' ? 'vert' : 'praat');
-  await applyScaleOrPitch();          // la fenêtre d'analyse change → ré-analyse
+  const next = {vert:'praat', praat:'magma', magma:'vert'}[dispMode];
+  const needsReanalyze = dispMode==='praat' || next==='praat';   // fenêtre gaussienne Praat
+  setDispMode(next);
+  if(needsReanalyze) await applyScaleOrPitch();   // fenêtre d'analyse change → ré-analyse
+  else redrawSpecOnly();                          // vert ↔ magma : même fenêtre, redraw seul
 });
 $('refToggle').addEventListener('click', ()=>{ setPraatRef(!praatLocalRef); redrawSpecOnly(); });
 $('praatDynIn').addEventListener('change', ()=>{ praatDyn     = clampNum($('praatDynIn'),10,120,50); redrawSpecOnly(); });

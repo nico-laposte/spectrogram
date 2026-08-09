@@ -202,6 +202,17 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
           <button id="refToggle" title="Référence de normalisation : vue courante / fichier entier" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:9px;cursor:pointer">Vue</button>
         </div>
       </div>
+      <div class="row" id="rowMagma" style="display:none">
+        <div class="rl">Magma</div>
+        <div class="fic">
+          <button id="magmaCalibToggle" title="Calibration : Abs (μ = niveau du fichier) ou Rel (μ réglable)" style="flex:0 0 auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--bdr);background:var(--surf);color:var(--mut);font-size:9px;cursor:pointer">Abs</button>
+          <span id="magmaMuWrap" style="display:none;align-items:center;gap:6px;flex:1 1 auto;min-width:0">
+            <label title="μ : plus il est grand, plus les basses intensités sont remontées" style="color:var(--mut);font-size:9px">μ</label>
+            <input type="range" id="magmaMuSlider" min="10" max="5000" step="10" value="2000" style="flex:1 1 auto;min-width:0">
+            <span id="magmaMuVal" style="color:var(--mut);font-size:9px;width:34px;text-align:right">2000</span>
+          </span>
+        </div>
+      </div>
       <div class="row" id="rowPitch">
         <div class="rl">Pitch</div>
         <div class="fic">
@@ -423,7 +434,7 @@ async function analyze(job){
   }
   if(job!==busy) return setOv(false);
 
-  spec={out,cols,maxBin,gMax,sumW};
+  spec={out,cols,maxBin,gMax,sumW,W};
   try{
     drawSpec(W,H);
     if(multiPitch || pitchAlgo==='multi'){
@@ -450,6 +461,36 @@ async function analyze(job){
     drawPlayhead(offset);
   }
   setOv(false);
+  if(typeof drawHighlight==='function') drawHighlight();
+}
+
+// Redessine à la nouvelle taille de canvas SANS refaire ni la FFT ni la
+// détection (pitch/accords/formants) : utilisé quand seule la hauteur
+// disponible change (ouverture/fermeture du panneau de réglages), puisque
+// le nombre de colonnes FFT (spec.cols) ne dépend que de la largeur.
+function redrawAfterResize(W,H){
+  if(!spec || !abuf) return;
+  sc.width=W; sc.height=H; pc.width=W; pc.height=H; fc.width=W; fc.height=H;
+  const phc=$('phc'); phc.width=W; phc.height=H;
+  try{
+    drawSpec(W,H);
+    if(multiPitch || pitchAlgo==='multi'){
+      drawCurveMusic(H);
+      drawChords();
+    } else {
+      drawCurve(H);
+    }
+    if(stretchMode==='voix'){ drawFormants(H); }
+    else { formants=[]; fc.width=fc.width; }  // effacer si autre mode
+    drawPhrases();
+    updatePhraseNav();
+    freqLabels();
+    timeLabels();
+  }catch(err){ console.error('redraw error:', err); }
+  if(!playing){
+    ph.style.display='block';
+    drawPlayhead(offset);
+  }
   if(typeof drawHighlight==='function') drawHighlight();
 }
 
@@ -604,7 +645,7 @@ function drawSpec(W,H){
         const u  = Math.max(0, Math.min(1, 1 + db*invDyn));   // 0 à -dyn dB, 1 au max
         r = g = b = Math.round(255*(1-u));                    // gris inversé
       } else if(magma){
-        [r,g,b]=magmaColor(Math.log1p(val)/logGMax);
+        [r,g,b]=magmaColor(magmaT(val, gMax, logGMax));
       } else {
         [r,g,b]=color(val/(gMax||1));
       }
@@ -1720,6 +1761,19 @@ function magmaColor(t){
   for(let i=1;i<s.length;i++){if(t<=s[i][0]){const lo=s[i-1][1],hi=s[i][1],f=(t-s[i-1][0])/(s[i][0]-s[i-1][0]);return[lo[0]+f*(hi[0]-lo[0]),lo[1]+f*(hi[1]-lo[1]),lo[2]+f*(hi[2]-lo[2])].map(Math.round);}}
   return[252,253,191];
 }
+// Calibration Magma — les deux formes sont des compansions μ-law (log1p(μ·x)/log1p(μ)) :
+// 'abs' : μ = gMax (le maximum du fichier/de la vue) — la courbe varie donc
+//         avec le niveau sonore : un fichier faible paraît plus sombre.
+// 'rel' : μ réglable (curseur), indépendant du niveau sonore du fichier —
+//         plus μ est grand, plus les basses intensités sont remontées.
+let magmaRelMu = 2000;
+let magmaCalib = 'abs';
+function magmaT(val, gMax, logGMax){
+  val = Math.max(val,0);
+  return magmaCalib==='rel'
+    ? Math.log1p(magmaRelMu * val/(gMax||1)) / Math.log1p(magmaRelMu)
+    : Math.log1p(val) / logGMax;
+}
 
 // ── PLAYBACK ──────────────────────────────────────────────────────────────
 // ── TIME-STRETCH (OLA, hauteur préservée) ───────────────────────────────────
@@ -1887,7 +1941,7 @@ function drawSpecFromFull(vs, ve){
         const u  = Math.max(0, Math.min(1, 1 + db*invDyn));
         r = g = b = Math.round(255*(1-u));
       } else if(magma){
-        [r,g,b]=magmaColor(Math.log1p(val)/logGMax);
+        [r,g,b]=magmaColor(magmaT(val, gMax, logGMax));
       } else {
         [r,g,b]=color(val/(gMax||1));
       }
@@ -2046,7 +2100,7 @@ function autoDetectMode(){
     ymin.value=80; ymax.value=8000; applyAxis();
     pmin.value=80; pmax.value=1100;
     showNotes=false; ntg.classList.remove('on');
-    setScaleLog(true); setMultiPitch(false); setPitchAlgo('yin');
+    setScaleLog(false); setMultiPitch(false); setPitchAlgo('yin');
     setAlgo('pv');
     $('rowFormants').style.display='flex';
     showChordStrip(false);
@@ -2836,7 +2890,13 @@ settingsBtn.addEventListener('click', async () => {
   settingsPanel.style.display = open ? 'none' : 'flex';
   settingsBtn.classList.toggle('on', !open);
   if(abuf && drawn){
-    await analyze(busy);
+    const W = sc.parentElement.clientWidth||320;
+    const H = sc.parentElement.clientHeight||200;
+    if(spec && spec.W===W){
+      redrawAfterResize(W,H);           // largeur inchangée : pas de FFT à refaire
+    } else {
+      await analyze(busy);              // largeur changée (rare) : recalcul complet
+    }
   }
 });
 
@@ -3028,7 +3088,17 @@ function setDispMode(mode){
   btn.style.borderColor = mode==='vert' ? 'var(--bdr)' : 'var(--acc)';
   btn.style.color       = mode==='vert' ? 'var(--mut)' : 'var(--acc)';
   $('rowPraat').style.display = praat ? 'flex' : 'none';
+  $('rowMagma').style.display = mode==='magma' ? 'flex' : 'none';
   ph.classList.toggle('praat', praat);   // curseur vert : Praat seulement, fond blanc oblige
+}
+function setMagmaCalib(calib){
+  magmaCalib = calib;
+  const rel = calib==='rel';
+  const btn = $('magmaCalibToggle');
+  btn.textContent   = rel ? 'Rel' : 'Abs';
+  btn.style.borderColor = rel ? 'var(--acc)' : 'var(--bdr)';
+  btn.style.color       = rel ? 'var(--acc)' : 'var(--mut)';
+  $('magmaMuWrap').style.display = rel ? 'flex' : 'none';
 }
 function setPraatRef(local){
   praatLocalRef = local;
@@ -3051,13 +3121,19 @@ function clampNum(el, lo, hi, def){
   return v;
 }
 $('dispToggle').addEventListener('click', async()=>{
-  const next = {vert:'praat', praat:'magma', magma:'vert'}[dispMode];
+  const next = {vert:'magma', magma:'praat', praat:'vert'}[dispMode];
   const needsReanalyze = dispMode==='praat' || next==='praat';   // fenêtre gaussienne Praat
   setDispMode(next);
   if(needsReanalyze) await applyScaleOrPitch();   // fenêtre d'analyse change → ré-analyse
   else redrawSpecOnly();                          // vert ↔ magma : même fenêtre, redraw seul
 });
 $('refToggle').addEventListener('click', ()=>{ setPraatRef(!praatLocalRef); redrawSpecOnly(); });
+$('magmaCalibToggle').addEventListener('click', ()=>{ setMagmaCalib(magmaCalib==='rel' ? 'abs' : 'rel'); redrawSpecOnly(); });
+$('magmaMuSlider').addEventListener('input', ()=>{
+  magmaRelMu = parseInt($('magmaMuSlider').value) || 2000;
+  $('magmaMuVal').textContent = magmaRelMu;
+  redrawSpecOnly();
+});
 $('praatDynIn').addEventListener('change', ()=>{ praatDyn     = clampNum($('praatDynIn'),10,120,50); redrawSpecOnly(); });
 $('praatPreIn').addEventListener('change', ()=>{ praatPreemph = clampNum($('praatPreIn'),0,18,6);    redrawSpecOnly(); });
 $('praatWinIn').addEventListener('change', async()=>{             // → ré-analyse
@@ -3192,7 +3268,7 @@ document.getElementById('modeVoix').addEventListener('click',async()=>{
   stretchMode='voix';
   ymin.value=80; ymax.value=8000; applyAxis();
   pmin.value=80; pmax.value=1100;
-  setScaleLog(true); setMultiPitch(false); setPitchAlgo('yin');
+  setScaleLog(false); setMultiPitch(false); setPitchAlgo('yin');
   document.getElementById('modeVoix').classList.add('on');
   document.getElementById('modeOiseau').classList.remove('on');
   document.getElementById('modeMusique').classList.remove('on');
